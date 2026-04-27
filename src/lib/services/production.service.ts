@@ -1,14 +1,6 @@
 'use client';
 
 // lib/services/production.service.ts
-// ✅ PRODUCTION READY
-// ✅ NO queries dentro de runTransaction
-// ✅ Ajustes con increment() sin serializar
-// ✅ BARRA: 1 bolsa tipo=BARRA consume 1 cuarto
-// ✅ MERMA/SALIDA/DEVOLUCION ajustan stockPorHielo (bolsas llenas)
-// ✅ AUTO-REPAIR para docs corruptos (cantidad/stockActual no numéricos)
-// ✅ AUTO-LLENADO POR BARRA: OPT-IN con guard FORZAR_AUTO_LLENA
-// ✅ FIX CRÍTICO: movimientos que YA afectan stock real => afectaStock:true (evita doble conteo en Inventario UI)
 
 import { db } from '@/lib/firebase/config.client';
 import type { IceType, MaquinaId, UbicacionId } from '@/lib/utils/types/product.types';
@@ -34,9 +26,6 @@ const MOVIMIENTOS_COLLECTION = 'movimientos';
 
 const UBICACION_DEFAULT: UbicacionId = 'CAMARA_FRIA';
 
-// =======================
-// Helpers
-// =======================
 const toTs = (d: Date) => Timestamp.fromDate(d);
 
 const safeNum = (n: any, f = 0) => (Number.isFinite(Number(n)) ? Number(n) : f);
@@ -49,6 +38,8 @@ const safeInt = (n: any, f = 0) => {
 };
 
 const isFiniteNumber = (v: any) => typeof v === 'number' && Number.isFinite(v);
+
+const safeStr = (v: any) => String(v ?? '').trim();
 
 const prepararParaFirestorePlain = (value: any): any => {
   if (value === undefined) return undefined;
@@ -100,9 +91,6 @@ const prepararParaFirestoreAllowFieldValue = (value: any): any => {
   return value;
 };
 
-// =======================
-// Repair helpers
-// =======================
 function needsRepairNumber(v: any) {
   return !(typeof v === 'number' && Number.isFinite(v));
 }
@@ -134,12 +122,15 @@ function readStockActualRobusto(bv: any, tipo: IceType): number {
 
 function readBarraCuartosRobusto(br: any) {
   const barrasFisicas = safeInt(br?.cantidad, 0);
-  const cuartosTotales = Number.isFinite(Number(br?.cuartosTotales)) ? Number(br.cuartosTotales) : barrasFisicas * 4;
+  const cuartosTotales = Number.isFinite(Number(br?.cuartosTotales))
+    ? Number(br.cuartosTotales)
+    : barrasFisicas * 4;
 
   const cuartosUsadosRaw = safeNum(br?.cuartosUsados, 0);
   const cuartosUsados = Math.min(Math.max(0, cuartosUsadosRaw), cuartosTotales);
 
   let cuartosDisponibles: number;
+
   if (Number.isFinite(Number(br?.cuartosDisponibles))) {
     cuartosDisponibles = Math.max(0, Number(br.cuartosDisponibles));
   } else {
@@ -156,32 +147,42 @@ function readBarraCuartosRobusto(br: any) {
 
 function normalizeIceType(v: any): IceType {
   const t = String(v ?? '').trim().toUpperCase();
+
   if (!(TIPOS_HIELO as readonly string[]).includes(t)) {
     throw new Error(`tipoHielo inválido: "${t}". Usa: ${TIPOS_HIELO.join(', ')}`);
   }
+
   return t as IceType;
 }
 
-// =======================
-// Tipos públicos
-// =======================
+function buildInventoryKey(bolsaVaciaCodigo: string, tipoHielo: IceType | string, pesoKg: number) {
+  return `${safeStr(bolsaVaciaCodigo).toUpperCase()}__${safeStr(tipoHielo).toUpperCase()}__${safeNum(pesoKg, 0)}`;
+}
+
 type LlenarStockOpts = {
-  bolsaVaciaCodigo: string; // BVxxx
+  bolsaVaciaCodigo: string;
   tipoHielo: IceType;
-  cantidad: number; // bolsas a llenar
+  cantidad: number;
   usuarioCodigo: string;
   usuarioNombre?: string;
   origen: 'ADMIN' | 'PRODUCCION';
-  barraOrigenCodigo?: string; // requerido si tipoHielo === 'BARRA'
-  maquina?: MaquinaId; // requerido en producción
+  barraOrigenCodigo?: string;
+  maquina?: MaquinaId;
   observaciones?: string;
 };
 
 type SalidaSubtipo = 'ENTREGA_TRANSPORTE' | 'VENTA_PUBLICO';
 type SalidaDestino = 'TRANSPORTE' | 'PUBLICO';
 
-type AjusteStockOpts = {
-  bolsaVaciaCodigo: string; // BVxxx
+type SalidaProductMeta = {
+  productoCodigo?: string;
+  productoNombre?: string;
+  pesoKg?: number;
+  inventoryKey?: string;
+};
+
+type AjusteStockOpts = SalidaProductMeta & {
+  bolsaVaciaCodigo: string;
   tipoHielo: IceType;
   cantidad: number;
   usuarioCodigo: string;
@@ -201,7 +202,7 @@ type AjusteStockOpts = {
   clienteNombre?: string;
 };
 
-export type SalidaBatchItem = {
+export type SalidaBatchItem = SalidaProductMeta & {
   bolsaVaciaCodigo: string;
   tipoHielo: IceType;
   cantidad: number;
@@ -214,7 +215,7 @@ export type SalidaBatchOpts = Omit<AjusteStockOpts, 'bolsaVaciaCodigo' | 'tipoHi
 type LlenarDesdeAsignacionOpts = {
   asignacionId: string;
   bolsaVaciaCodigo: string;
-  productoNombre: string; // legacy
+  productoNombre: string;
   tipoHielo: IceType;
   cantidad: number;
 
@@ -229,7 +230,7 @@ type LlenarDesdeAsignacionOpts = {
   origen?: 'PRODUCCION' | 'ADMIN';
   observaciones?: string;
 
-  descontarBolsaVaciaFisica?: boolean; // default false
+  descontarBolsaVaciaFisica?: boolean;
 
   maquina?: MaquinaId;
 };
@@ -244,35 +245,31 @@ type AutoLlenarBarraOpts = {
   observaciones?: string;
 };
 
-// =======================
-// Service
-// =======================
 export class ProductionService {
   static COLECCION_PRODUCTOS = PRODUCTOS_COLLECTION;
   static COLECCION_ASIGNACIONES = ASIGNACIONES_COLLECTION;
   static COLECCION_MOVIMIENTOS = MOVIMIENTOS_COLLECTION;
 
-  // -----------------------
-  // Resolutores (FUERA tx)
-  // -----------------------
   static async #resolverProductoPorCodigo(codigo: string) {
     const cod = String(codigo ?? '').trim().toUpperCase();
     if (!cod) return null;
 
-    const snap = await getDocs(query(collection(db, PRODUCTOS_COLLECTION), where('codigo', '==', cod), qLimit(1)));
+    const snap = await getDocs(
+      query(collection(db, PRODUCTOS_COLLECTION), where('codigo', '==', cod), qLimit(1))
+    );
+
     if (snap.empty) return null;
 
     return snap.docs[0];
   }
 
-  /** ✅ Resolver MUCHOS códigos a refs FUERA de tx (max 10 por chunk por "in") */
   static async #resolverRefsPorCodigos(codigos: string[]) {
     const unique = Array.from(
       new Set(
         codigos
           .map((c) => String(c ?? '').trim().toUpperCase())
-          .filter(Boolean),
-      ),
+          .filter(Boolean)
+      )
     );
 
     const out = new Map<string, { ref: DocumentReference; data?: any }>();
@@ -284,6 +281,7 @@ export class ProductionService {
     for (let i = 0; i < unique.length; i += chunkSize) {
       const chunk = unique.slice(i, i + chunkSize);
       const snap = await getDocs(query(colRef, where('codigo', 'in', chunk)));
+
       snap.forEach((d) => {
         const data = d.data() as any;
         const codigo = String(data?.codigo ?? '').trim().toUpperCase();
@@ -297,6 +295,23 @@ export class ProductionService {
   static #buildNombreBolsaLlena(bv: any) {
     const kg = safeNum(bv?.pesoKg, 0);
     return kg > 0 ? `Bolsa llena ${kg}kg` : 'Bolsa llena';
+  }
+
+  static #resolveSalidaProductMeta(input: SalidaProductMeta & { bolsaVaciaCodigo: string; tipoHielo: IceType }, bvData: any) {
+    const bvCodigo = safeStr(input.bolsaVaciaCodigo).toUpperCase();
+    const tipoHielo = normalizeIceType(input.tipoHielo);
+    const pesoKg = safeNum(input.pesoKg, safeNum(bvData?.pesoKg, 0));
+
+    const productoCodigo = safeStr(input.productoCodigo) || bvCodigo;
+    const productoNombre = safeStr(input.productoNombre) || ProductionService.#buildNombreBolsaLlena(bvData);
+    const inventoryKey = safeStr(input.inventoryKey) || buildInventoryKey(bvCodigo, tipoHielo, pesoKg);
+
+    return {
+      productoCodigo,
+      productoNombre,
+      pesoKg,
+      inventoryKey,
+    };
   }
 
   static #validarBolsaVacia(bv: any) {
@@ -329,13 +344,16 @@ export class ProductionService {
 
   static #validarTipoPermitido(bv: any, tipoHielo: IceType) {
     const permitidos = ProductionService.#getTiposPermitidosLikeUI(bv);
+
     if (permitidos.length && !permitidos.includes(tipoHielo)) {
       throw new Error(`Este producto no permite tipoHielo=${tipoHielo}`);
     }
   }
 
   static #validarCantidad(cantidad: number) {
-    if (!Number.isFinite(cantidad) || cantidad <= 0) throw new Error('Cantidad debe ser > 0');
+    if (!Number.isFinite(cantidad) || cantidad <= 0) {
+      throw new Error('Cantidad debe ser > 0');
+    }
   }
 
   static #validarMaquinaSiProduccion(origen: 'ADMIN' | 'PRODUCCION', maquina?: MaquinaId) {
@@ -346,6 +364,7 @@ export class ProductionService {
 
   static #normalizeSalidaMeta(opts: Pick<AjusteStockOpts, 'salidaSubtipo' | 'salidaDestino' | 'clienteNombre'>) {
     const subtipo: SalidaSubtipo = (opts as any).salidaSubtipo ?? 'ENTREGA_TRANSPORTE';
+
     const destino: SalidaDestino =
       (opts as any).salidaDestino ?? (subtipo === 'VENTA_PUBLICO' ? 'PUBLICO' : 'TRANSPORTE');
 
@@ -368,6 +387,7 @@ export class ProductionService {
 
     if (tipoHielo) {
       const raw = bv?.stockPorHielo?.[tipoHielo]?.stockActual;
+
       if (needsRepairNumber(raw)) {
         fixes[`stockPorHielo.${tipoHielo}.stockActual`] = readStockActualRobusto(bv, tipoHielo);
       }
@@ -389,21 +409,18 @@ export class ProductionService {
         tipoHielo && isFiniteNumber(bv?.stockPorHielo?.[tipoHielo]?.stockActual)
           ? Number(bv.stockPorHielo[tipoHielo].stockActual)
           : tipoHielo
-          ? safeNum(fixes[`stockPorHielo.${tipoHielo}.stockActual`], 0)
-          : 0,
+            ? safeNum(fixes[`stockPorHielo.${tipoHielo}.stockActual`], 0)
+            : 0,
     };
   }
 
-  // ============================================================
-  // ✅ AUTO-LLENADO POR BARRA (OPT-IN con guard anti-accidentes)
-  // ============================================================
   static async autoLlenarStockBarraDesdeCuartos(opts: AutoLlenarBarraOpts) {
     const barraCodigo = String(opts.barraOrigenCodigo ?? '').trim().toUpperCase();
     const cuartosInput = safeInt(opts.cuartosDisponiblesAUsar, 0);
+
     if (!barraCodigo) throw new Error('barraOrigenCodigo requerido');
     if (cuartosInput <= 0) return { usados: 0, sobrantes: 0 };
 
-    // ✅ GUARD: esto consume cuartos SOLO si viene FORZAR_AUTO_LLENA en observaciones
     const origen = String(opts.origen ?? '');
     if (origen === 'ALTA_BARRA' || origen === 'PRODUCCION_BARRA') {
       const obs = String(opts.observaciones ?? '');
@@ -413,12 +430,12 @@ export class ProductionService {
     const barraDoc = await ProductionService.#resolverProductoPorCodigo(barraCodigo);
     if (!barraDoc) throw new Error(`Barra ${barraCodigo} no encontrada`);
 
-    // ✅ BV candidatas fuera de tx (luego se re-lee dentro)
     const constraints: QueryConstraint[] = [where('tipo', '==', 'BOLSA'), qLimit(2000)];
     const snapBV = await getDocs(query(collection(db, PRODUCTOS_COLLECTION), ...constraints));
 
     const bvDocs = snapBV.docs.filter((d) => {
       const bv = d.data() as any;
+
       try {
         ProductionService.#validarBolsaVacia(bv);
         ProductionService.#validarTipoPermitido(bv, 'BARRA');
@@ -435,11 +452,13 @@ export class ProductionService {
     const maquina = opts.maquina;
 
     return await runTransaction(db, async (tx) => {
-      // READ
       const brTx = await tx.get(barraDoc.ref);
       if (!brTx.exists()) throw new Error('La barra ya no existe');
+
       const br = brTx.data() as any;
-      if (String(br?.tipo ?? '').toUpperCase().trim() !== 'BARRA') throw new Error('barraOrigen no es BARRA');
+      if (String(br?.tipo ?? '').toUpperCase().trim() !== 'BARRA') {
+        throw new Error('barraOrigen no es BARRA');
+      }
 
       const { cuartosTotales, cuartosUsados, cuartosDisponibles } = readBarraCuartosRobusto(br);
 
@@ -460,6 +479,7 @@ export class ProductionService {
         if (!s.exists()) continue;
 
         const bv = s.data() as any;
+
         ProductionService.#validarBolsaVacia(bv);
         ProductionService.#validarTipoPermitido(bv, 'BARRA');
 
@@ -472,6 +492,7 @@ export class ProductionService {
         const capPorMax = max > 0 ? Math.max(0, max - prevStock) : vacias;
 
         const capacidad = Math.max(0, Math.min(vacias, capPorMax));
+
         if (capacidad > 0) {
           candidatos.push({
             ref: d.ref,
@@ -486,14 +507,12 @@ export class ProductionService {
 
       if (!candidatos.length) return { usados: 0, sobrantes: cuartosInput };
 
-      // prioridad: al que más le falta (menor %)
       candidatos.sort((a, b) => {
         const pa = a.max > 0 ? a.prevStock / a.max : 0;
         const pb = b.max > 0 ? b.prevStock / b.max : 0;
         return pa - pb;
       });
 
-      // WRITE
       let usados = 0;
       const items: any[] = [];
       const impactos: any[] = [];
@@ -586,13 +605,14 @@ export class ProductionService {
       );
 
       const movRef = doc(collection(db, MOVIMIENTOS_COLLECTION));
+
       tx.set(
         movRef,
         prepararParaFirestorePlain({
           codigo: `MOV-${Date.now()}`,
           tipo: 'AUTO_LLENA_BARRA',
           origen: opts.origen,
-          afectaStock: true, // ✅ FIX
+          afectaStock: true,
 
           barraOrigenCodigo: barraCodigo,
 
@@ -620,11 +640,9 @@ export class ProductionService {
     });
   }
 
-  // ============================================================
-  // ✅ LLENADO DIRECTO (ADMIN / PRODUCCIÓN) — BV -> stockPorHielo
-  // ============================================================
   static async llenarStockDesdeBolsaVacia(opts: LlenarStockOpts) {
     const tipoHielo = normalizeIceType(opts.tipoHielo);
+
     ProductionService.#validarCantidad(opts.cantidad);
     ProductionService.#validarMaquinaSiProduccion(opts.origen, opts.maquina);
 
@@ -636,6 +654,7 @@ export class ProductionService {
     if (!bvDoc) throw new Error(`Bolsa vacía ${opts.bolsaVaciaCodigo} no encontrada`);
 
     let barraDoc: any = null;
+
     if (tipoHielo === 'BARRA') {
       barraDoc = await ProductionService.#resolverProductoPorCodigo(opts.barraOrigenCodigo!);
       if (!barraDoc) throw new Error(`Barra ${opts.barraOrigenCodigo} no encontrada`);
@@ -666,19 +685,19 @@ export class ProductionService {
       const prev = safeNum(repaired.stockActual, 0);
       const next = prev + opts.cantidad;
 
-      // ✅ Barra: 1 cuarto por bolsa (si tipo=BARRA)
       if (tipoHielo === 'BARRA') {
         const brTx = await tx.get(barraDoc.ref);
         if (!brTx.exists()) throw new Error('La barra ya no existe');
 
         const br = brTx.data() as any;
+
         if (String(br?.tipo ?? '').toUpperCase().trim() !== 'BARRA') {
           throw new Error('El producto barraOrigen no es BARRA');
         }
 
         const { cuartosTotales, cuartosUsados, cuartosDisponibles } = readBarraCuartosRobusto(br);
+        const cuartosNecesarios = opts.cantidad;
 
-        const cuartosNecesarios = opts.cantidad; // 1 cuarto por bolsa
         if (cuartosDisponibles < cuartosNecesarios) {
           throw new Error(
             `Barra sin cuartos suficientes: ${cuartosDisponibles} disponibles, ${cuartosNecesarios} necesarios`
@@ -698,7 +717,6 @@ export class ProductionService {
         );
       }
 
-      // ✅ UPDATE BV sin borrar stockPorHielo completo
       tx.update(
         bvDoc.ref,
         prepararParaFirestoreAllowFieldValue({
@@ -720,7 +738,7 @@ export class ProductionService {
           codigo: `MOV-${Date.now()}`,
           tipo: 'LLENADO_BOLSA',
           origen: opts.origen,
-          afectaStock: true, // ✅ FIX
+          afectaStock: true,
 
           maquina: maquina ?? null,
           ubicacion,
@@ -754,17 +772,13 @@ export class ProductionService {
     });
   }
 
-  // ============================================================
-  // ✅ LLENADO PRODUCCIÓN DESDE ASIGNACIÓN
-  // ============================================================
   static async llenarDesdeAsignacion(opts: LlenarDesdeAsignacionOpts) {
     const tipoHielo = normalizeIceType(opts.tipoHielo);
+
     ProductionService.#validarCantidad(opts.cantidad);
 
     const ahora = new Date();
     const origen = opts.origen ?? 'PRODUCCION';
-
-    // ✅ Por default NO descuenta BV físico (ya se descontó al asignar)
     const descontarBV = opts.descontarBolsaVaciaFisica === true;
 
     ProductionService.#validarMaquinaSiProduccion(origen, opts.maquina);
@@ -778,8 +792,10 @@ export class ProductionService {
     if (!bvDoc) throw new Error(`Bolsa vacía ${opts.bolsaVaciaCodigo} no encontrada`);
 
     let barraDoc: any = null;
+
     if (tipoHielo === 'BARRA') {
       if (!opts.barraOrigenCodigo) throw new Error('Para tipoHielo=BARRA debes seleccionar barraOrigenCodigo');
+
       barraDoc = await ProductionService.#resolverProductoPorCodigo(opts.barraOrigenCodigo);
       if (!barraDoc) throw new Error(`Barra ${opts.barraOrigenCodigo} no encontrada`);
     }
@@ -787,6 +803,7 @@ export class ProductionService {
     return await runTransaction(db, async (tx) => {
       const asigTx = await tx.get(refAsig);
       if (!asigTx.exists()) throw new Error('Asignación no encontrada');
+
       const asig = asigTx.data() as any;
 
       if (String(asig?.productoCodigo ?? '').toUpperCase() !== String(opts.bolsaVaciaCodigo ?? '').toUpperCase()) {
@@ -803,6 +820,7 @@ export class ProductionService {
 
       const bvTx = await tx.get(bvDoc.ref);
       if (!bvTx.exists()) throw new Error('La bolsa vacía ya no existe');
+
       const bv = bvTx.data() as any;
 
       ProductionService.#validarBolsaVacia(bv);
@@ -823,13 +841,14 @@ export class ProductionService {
         if (!brTx.exists()) throw new Error('La barra ya no existe');
 
         const br = brTx.data() as any;
+
         if (String(br?.tipo ?? '').toUpperCase().trim() !== 'BARRA') {
           throw new Error('El producto barraOrigen no es BARRA');
         }
 
         const { cuartosTotales, cuartosUsados, cuartosDisponibles } = readBarraCuartosRobusto(br);
-
         const cuartosNecesarios = opts.cantidad;
+
         if (cuartosDisponibles < cuartosNecesarios) {
           throw new Error(
             `Barra sin cuartos suficientes: ${cuartosDisponibles} disponibles, ${cuartosNecesarios} necesarios`
@@ -849,8 +868,8 @@ export class ProductionService {
         );
       }
 
-      // consume asignación
       const nuevoAsig = disponiblesAsig - opts.cantidad;
+
       tx.update(
         refAsig,
         prepararParaFirestorePlain({
@@ -867,6 +886,7 @@ export class ProductionService {
         ubicacionActual: ubicacion,
         ...(maquina ? { maquinaActual: maquina } : {}),
       };
+
       if (descontarBV) bvUpdate.cantidad = increment(-opts.cantidad);
 
       tx.update(bvDoc.ref, prepararParaFirestoreAllowFieldValue(bvUpdate));
@@ -880,7 +900,7 @@ export class ProductionService {
           codigo: `MOV-${Date.now()}`,
           tipo: 'LLENADO_BOLSA',
           origen,
-          afectaStock: true, // ✅ FIX
+          afectaStock: true,
 
           maquina: maquina ?? null,
           ubicacion,
@@ -921,9 +941,6 @@ export class ProductionService {
     });
   }
 
-  // ============================================================
-  // SALIDA / MERMA / DEVOLUCIÓN (stockPorHielo)
-  // ============================================================
   static async registrarSalidaStock(opts: AjusteStockOpts) {
     const meta = ProductionService.#normalizeSalidaMeta(opts);
 
@@ -946,7 +963,14 @@ export class ProductionService {
 
     const salidaMeta = ProductionService.#normalizeSalidaMeta(opts);
 
-    const grouped = new Map<string, { bolsaVaciaCodigo: string; tipoHielo: IceType; cantidad: number }>();
+    const grouped = new Map<
+      string,
+      {
+        bolsaVaciaCodigo: string;
+        tipoHielo: IceType;
+        cantidad: number;
+      } & SalidaProductMeta
+    >();
 
     for (const it of opts.items) {
       const bv = String(it?.bolsaVaciaCodigo ?? '').trim().toUpperCase();
@@ -958,10 +982,29 @@ export class ProductionService {
 
       const key = `${bv}__${tipo}`;
       const prev = grouped.get(key);
-      grouped.set(
-        key,
-        prev ? { ...prev, cantidad: prev.cantidad + qty } : { bolsaVaciaCodigo: bv, tipoHielo: tipo, cantidad: qty }
-      );
+
+      if (prev) {
+        grouped.set(key, {
+          ...prev,
+          cantidad: prev.cantidad + qty,
+
+          productoCodigo: prev.productoCodigo || it.productoCodigo,
+          productoNombre: prev.productoNombre || it.productoNombre,
+          pesoKg: prev.pesoKg ?? it.pesoKg,
+          inventoryKey: prev.inventoryKey || it.inventoryKey,
+        });
+      } else {
+        grouped.set(key, {
+          bolsaVaciaCodigo: bv,
+          tipoHielo: tipo,
+          cantidad: qty,
+
+          productoCodigo: it.productoCodigo,
+          productoNombre: it.productoNombre,
+          pesoKg: it.pesoKg,
+          inventoryKey: it.inventoryKey,
+        });
+      }
     }
 
     const itemsAgrupados = Array.from(grouped.values());
@@ -970,6 +1013,7 @@ export class ProductionService {
     const maquina = opts.maquina;
 
     const mapRefs = await ProductionService.#resolverRefsPorCodigos(itemsAgrupados.map((x) => x.bolsaVaciaCodigo));
+
     for (const it of itemsAgrupados) {
       if (!mapRefs.has(it.bolsaVaciaCodigo)) {
         throw new Error(`Bolsa vacía ${it.bolsaVaciaCodigo} no encontrada`);
@@ -985,7 +1029,7 @@ export class ProductionService {
         bvData: any;
         prevStock: number;
         nextStock: number;
-      }> = [];
+      } & SalidaProductMeta> = [];
 
       for (const it of itemsAgrupados) {
         const entry = mapRefs.get(it.bolsaVaciaCodigo)!;
@@ -1009,6 +1053,18 @@ export class ProductionService {
           throw new Error(`Stock insuficiente en ${it.bolsaVaciaCodigo} / ${it.tipoHielo}: ${prevStock} disponible`);
         }
 
+        const productoMeta = ProductionService.#resolveSalidaProductMeta(
+          {
+            bolsaVaciaCodigo: it.bolsaVaciaCodigo,
+            tipoHielo: it.tipoHielo,
+            productoCodigo: it.productoCodigo,
+            productoNombre: it.productoNombre,
+            pesoKg: it.pesoKg,
+            inventoryKey: it.inventoryKey,
+          },
+          bv
+        );
+
         reads.push({
           bvCodigo: it.bolsaVaciaCodigo,
           tipoHielo: it.tipoHielo,
@@ -1017,6 +1073,11 @@ export class ProductionService {
           bvData: bv,
           prevStock,
           nextStock,
+
+          productoCodigo: productoMeta.productoCodigo,
+          productoNombre: productoMeta.productoNombre,
+          pesoKg: productoMeta.pesoKg,
+          inventoryKey: productoMeta.inventoryKey,
         });
       }
 
@@ -1046,7 +1107,7 @@ export class ProductionService {
           batch: true,
           batchCount: reads.length,
           origen: 'PRODUCCION',
-          afectaStock: true, // ✅ FIX
+          afectaStock: true,
 
           maquina: maquina ?? null,
           ubicacion,
@@ -1070,8 +1131,11 @@ export class ProductionService {
 
           items: reads.map((r) => ({
             bolsaVaciaCodigo: r.bvCodigo,
-            productoCodigo: r.bvCodigo,
-            productoNombre: ProductionService.#buildNombreBolsaLlena(r.bvData),
+            productoCodigo: r.productoCodigo || r.bvCodigo,
+            productoNombre: r.productoNombre || ProductionService.#buildNombreBolsaLlena(r.bvData),
+            pesoKg: safeNum(r.pesoKg, safeNum(r.bvData?.pesoKg, 0)),
+            inventoryKey: r.inventoryKey || buildInventoryKey(r.bvCodigo, r.tipoHielo, safeNum(r.pesoKg, r.bvData?.pesoKg)),
+
             tipoHielo: r.tipoHielo,
             cantidad: r.cantidad,
             delta: -Math.abs(r.cantidad),
@@ -1111,6 +1175,7 @@ export class ProductionService {
     }
   ) {
     const tipoHielo = normalizeIceType(opts.tipoHielo);
+
     ProductionService.#validarCantidad(opts.cantidad);
 
     const bvDoc = await ProductionService.#resolverProductoPorCodigo(opts.bolsaVaciaCodigo);
@@ -1130,6 +1195,7 @@ export class ProductionService {
       if (!bvTx.exists()) throw new Error('La bolsa vacía ya no existe');
 
       const bv = bvTx.data() as any;
+
       ProductionService.#validarBolsaVacia(bv);
       ProductionService.#validarTipoPermitido(bv, tipoHielo);
 
@@ -1158,7 +1224,17 @@ export class ProductionService {
       const empleadoCodigo = opts.empleadoAsignadoCodigo ?? opts.usuarioCodigo;
       const empleadoNombre = opts.empleadoAsignadoNombre ?? opts.usuarioNombre ?? '';
 
-      const nombreBolsaLlena = ProductionService.#buildNombreBolsaLlena(bv);
+      const productoMeta = ProductionService.#resolveSalidaProductMeta(
+        {
+          bolsaVaciaCodigo: opts.bolsaVaciaCodigo,
+          tipoHielo,
+          productoCodigo: opts.productoCodigo,
+          productoNombre: opts.productoNombre,
+          pesoKg: opts.pesoKg,
+          inventoryKey: opts.inventoryKey,
+        },
+        bv
+      );
 
       tx.set(
         movRef,
@@ -1168,11 +1244,11 @@ export class ProductionService {
             opts.tipoMovimiento === 'MERMA'
               ? 'MERMA_BOLSA'
               : opts.tipoMovimiento === 'DEVOLUCION'
-              ? 'DEVOLUCION_BOLSA'
-              : 'SALIDA_BOLSA',
+                ? 'DEVOLUCION_BOLSA'
+                : 'SALIDA_BOLSA',
 
           origen: opts.origen,
-          afectaStock: true, // ✅ FIX (CLAVE PARA DEVOLUCIONES)
+          afectaStock: true,
 
           maquina: maquina ?? null,
           ubicacion,
@@ -1181,8 +1257,11 @@ export class ProductionService {
           salidaDestino: salidaMeta.destino,
           clienteNombre: salidaMeta.clienteNombre,
 
-          productoCodigo: opts.bolsaVaciaCodigo,
-          productoNombre: nombreBolsaLlena,
+          productoCodigo: productoMeta.productoCodigo,
+          productoNombre: productoMeta.productoNombre,
+          pesoKg: productoMeta.pesoKg,
+          inventoryKey: productoMeta.inventoryKey,
+
           tipoProducto: 'BOLSA',
 
           deltaPrincipal: opts.delta,
@@ -1191,6 +1270,8 @@ export class ProductionService {
 
           tipoHielo,
           status: 'LLENA',
+
+          bolsaVaciaCodigo: opts.bolsaVaciaCodigo,
 
           motivo: opts.motivo ?? '',
           destinatario: opts.destinatario ?? '',

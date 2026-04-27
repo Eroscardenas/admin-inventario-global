@@ -6,6 +6,7 @@
 // - Soporta modoBatch (una sola salida con varios renglones) y modo individual
 // - Transporte (elige chofer) o Venta público (cliente)
 // - Fallback: si no existe hook batch, usa ProductionService directo (recomendado)
+// - Vinculación Entregas PDF: manda productoCodigo, productoNombre, pesoKg e inventoryKey
 
 'use client';
 
@@ -49,9 +50,6 @@ import {
   Pencil,
 } from 'lucide-react';
 
-/* ============================================================
-   Tipos (UI)
-============================================================ */
 type SalidaSubtipo = 'ENTREGA_TRANSPORTE' | 'VENTA_PUBLICO';
 
 type Chofer = {
@@ -101,9 +99,6 @@ type Toast =
       msg: string;
     };
 
-/* ============================================================
-   Helpers
-============================================================ */
 const num = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -113,7 +108,13 @@ const fmtDateTime = (d: unknown) => {
   try {
     if (!d) return '—';
     const asAny = d as any;
-    const dt = typeof asAny?.toDate === 'function' ? asAny.toDate() : d instanceof Date ? d : new Date(d as any);
+    const dt =
+      typeof asAny?.toDate === 'function'
+        ? asAny.toDate()
+        : d instanceof Date
+          ? d
+          : new Date(d as any);
+
     if (Number.isNaN(dt.getTime())) return '—';
     return dt.toLocaleString('es-MX');
   } catch {
@@ -128,7 +129,8 @@ const clampInt = (n: number) => {
   return Number.isFinite(x) ? x : 0;
 };
 
-const isIceType = (v: unknown): v is IceType => (TIPOS_HIELO as readonly string[]).includes(String(v));
+const isIceType = (v: unknown): v is IceType =>
+  (TIPOS_HIELO as readonly string[]).includes(String(v));
 
 const toIceTypeOrDefault = (v: unknown, fallback: IceType): IceType =>
   isIceType(v) ? (String(v) as IceType) : fallback;
@@ -143,11 +145,11 @@ const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const keyBVTipo = (bv: string, tipo: IceType) => `${safeStr(bv)}__${tipo}`;
 
-const MAQUINAS: MaquinaId[] = ['M1', 'M2', 'M3','Maquina Prueba','KLYR'];
+const buildInventoryKey = (bv: string, tipo: IceType | string, pesoKg: number) =>
+  `${safeStr(bv)}__${safeStr(tipo)}__${num(pesoKg)}`;
 
-/* ============================================================
-  Modal Shell
-============================================================ */
+const MAQUINAS: MaquinaId[] = ['M1', 'M2', 'M3', 'Maquina Prueba', 'KLYR'];
+
 function ModalShell({
   title,
   onClose,
@@ -200,9 +202,6 @@ function ModalShell({
   );
 }
 
-/* ============================================================
-  SlideOver (Choferes)
-============================================================ */
 function SlideOver({
   title,
   open,
@@ -240,9 +239,6 @@ function SlideOver({
   );
 }
 
-/* ============================================================
-   Page
-============================================================ */
 export default function SalidasPage() {
   const router = useRouter();
   const { productionSession, loading: authLoading, updateLastActivity } = useAuthContext();
@@ -263,7 +259,6 @@ export default function SalidasPage() {
     }
   }, [productsHook.reload]);
 
-  // ✅ acciones del hook (si existen)
   const hookRegistrarSalidaStock = (productsHook.actions as any)?.registrarSalidaStock as
     | undefined
     | ((payload: any) => Promise<any>);
@@ -272,16 +267,13 @@ export default function SalidasPage() {
     | undefined
     | ((payload: any) => Promise<any>);
 
-  // ✅ batch real si existe hook, pero aunque no exista usamos Service batch (recomendado)
   const supportsHookBatch = typeof hookRegistrarSalidaStockBatch === 'function';
 
-  // Guard auth
   useEffect(() => {
     if (authLoading) return;
     if (!productionSession) router.replace('/produccion/login');
   }, [authLoading, productionSession, router]);
 
-  // tick actividad
   useEffect(() => {
     const t = setInterval(() => updateLastActivity?.(), 45_000);
     return () => clearInterval(t);
@@ -307,7 +299,6 @@ export default function SalidasPage() {
   const [tipoHielo, setTipoHielo] = useState<IceType>(TIPOS_HIELO[0]);
   const [cantidad, setCantidad] = useState<number | ''>('');
 
-  // ✅ modoBatch = “una sola salida con varios renglones”
   const [items, setItems] = useState<EntregaItem[]>([]);
   const [modoBatch, setModoBatch] = useState<boolean>(true);
 
@@ -323,9 +314,6 @@ export default function SalidasPage() {
 
   const [q, setQ] = useState<string>('');
 
-  /* ============================================================
-     BV solo con stock
-============================================================ */
   const bvCodigosConStock = useMemo(() => {
     const set = new Set<string>();
     for (const row of stockLlenoPorProducto) {
@@ -341,10 +329,13 @@ export default function SalidasPage() {
   const bvList = useMemo(() => {
     const base = bolsasVacias.filter((p) => bvCodigosConStock.has(safeStr(p.codigo)));
     const queryText = safeStr(q).toLowerCase();
+
     return !queryText
       ? base
       : base.filter(
-          (p) => safeStr(p.nombre).toLowerCase().includes(queryText) || safeStr(p.codigo).toLowerCase().includes(queryText)
+          (p) =>
+            safeStr(p.nombre).toLowerCase().includes(queryText) ||
+            safeStr(p.codigo).toLowerCase().includes(queryText)
         );
   }, [bolsasVacias, bvCodigosConStock, q]);
 
@@ -425,9 +416,32 @@ export default function SalidasPage() {
     [disponiblesPorBVTipo]
   );
 
-  /* ============================================================
-     Carrito: merge BV+tipo
-============================================================ */
+  const getSalidaProductMeta = useCallback(
+    (bolsaVaciaCodigo: string, tipoHieloValue: IceType) => {
+      const row =
+        stockLlenoPorProducto.find(
+          (x) => safeStr(x.bolsaVaciaCodigo) === safeStr(bolsaVaciaCodigo)
+        ) ?? null;
+
+      const pesoKg = num(row?.pesoKg);
+      const productoNombreBase = safeStr(row?.productoNombre);
+      const tipo = safeStr(tipoHieloValue);
+      const codigo = safeStr(bolsaVaciaCodigo);
+
+      const productoNombre =
+        productoNombreBase ||
+        (pesoKg > 0 ? `${tipo} ${pesoKg}KG` : `${codigo} ${tipo}`);
+
+      return {
+        productoCodigo: codigo,
+        productoNombre,
+        pesoKg,
+        inventoryKey: buildInventoryKey(codigo, tipo, pesoKg),
+      };
+    },
+    [stockLlenoPorProducto]
+  );
+
   const addOrMergeItem = useCallback(() => {
     if (!bvCodigo) return;
     if (!isIceType(tipoHielo)) return;
@@ -482,6 +496,7 @@ export default function SalidasPage() {
   const setItemCantidad = useCallback(
     (id: string, raw: unknown) => {
       const qv = clampInt(safeInt(raw, 0));
+
       setItems((prev) => {
         const next = [...prev];
         const idx = next.findIndex((x) => x.id === id);
@@ -489,7 +504,6 @@ export default function SalidasPage() {
 
         const it = next[idx];
         const disp = getDisponible(it.bolsaVaciaCodigo, it.tipoHielo);
-
         const nextQty = qv <= 0 ? 1 : qv;
 
         if (nextQty > disp) {
@@ -505,14 +519,15 @@ export default function SalidasPage() {
     [getDisponible]
   );
 
-  const totalUnidades = useMemo(() => items.reduce((acc, it) => acc + safeInt(it.cantidad, 0), 0), [items]);
+  const totalUnidades = useMemo(
+    () => items.reduce((acc, it) => acc + safeInt(it.cantidad, 0), 0),
+    [items]
+  );
 
-  /* ============================================================
-     Choferes
-============================================================ */
   const cargarChoferes = useCallback(async () => {
     setChoferesErr('');
     setChoferesLoading(true);
+
     try {
       const ref = collection(db, 'empleados');
       const qy = query(
@@ -522,6 +537,7 @@ export default function SalidasPage() {
         orderBy('nombre', 'asc'),
         qLimit(200)
       );
+
       const snap = await getDocs(qy);
 
       setChoferes(
@@ -559,9 +575,6 @@ export default function SalidasPage() {
     return safeStr(clienteNombre);
   }, [subtipo, chofer, clienteNombre]);
 
-  /* ============================================================
-     Validación
-============================================================ */
   const commonMetaOk = useMemo(() => {
     if (!productionSession) return false;
     if (!safeStr(empleadoCodigo) || !safeStr(empleadoNombre)) return false;
@@ -603,6 +616,7 @@ export default function SalidasPage() {
       const disp = getDisponible(it.bolsaVaciaCodigo, it.tipoHielo);
       if (qv > disp) return false;
     }
+
     return true;
   }, [commonMetaOk, items, getDisponible]);
 
@@ -634,9 +648,6 @@ export default function SalidasPage() {
     };
   }, [empleadoCodigo, empleadoNombre, subtipo, destinatarioFinal, clienteNombre, observaciones, maquina]);
 
-  /* ============================================================
-     ✅ Registrar (HOOK si existe; pero SIEMPRE batch funcional con Service)
-============================================================ */
   const onRegistrar = useCallback(async () => {
     console.log('[SALIDAS] confirmar', { modoBatch, canSubmit });
 
@@ -652,35 +663,42 @@ export default function SalidasPage() {
       const meta = buildCommonMeta();
 
       const registrarSingle = async (payload: any) => {
-        // ✅ si existe hook, úsalo; si no, usa service
         if (typeof hookRegistrarSalidaStock === 'function') {
           console.log('[SALIDAS] usando hookRegistrarSalidaStock');
           return await hookRegistrarSalidaStock(payload);
         }
+
         console.log('[SALIDAS] usando ProductionService.registrarSalidaStock (fallback)');
         return await ProductionService.registrarSalidaStock(payload);
       };
 
       const registrarBatch = async (payload: any) => {
-        // ✅ preferimos el HOOK si existe, si no service directo (service es el que ya fixea la transacción)
         if (typeof hookRegistrarSalidaStockBatch === 'function') {
           console.log('[SALIDAS] usando hookRegistrarSalidaStockBatch');
           return await hookRegistrarSalidaStockBatch(payload);
         }
+
         console.log('[SALIDAS] usando ProductionService.registrarSalidaStockBatch (fallback)');
         return await ProductionService.registrarSalidaStockBatch(payload);
       };
 
       if (modoBatch) {
-        const payloadItems: SalidaBatchItem[] = items.map((it) => ({
-          bolsaVaciaCodigo: it.bolsaVaciaCodigo,
-          tipoHielo: it.tipoHielo,
-          cantidad: safeInt(it.cantidad, 0),
-        }));
+        const payloadItems: Array<SalidaBatchItem & Record<string, unknown>> = items.map((it) => {
+          const metaProducto = getSalidaProductMeta(it.bolsaVaciaCodigo, it.tipoHielo);
+
+          return {
+            bolsaVaciaCodigo: it.bolsaVaciaCodigo,
+            productoCodigo: metaProducto.productoCodigo,
+            productoNombre: metaProducto.productoNombre,
+            pesoKg: metaProducto.pesoKg,
+            inventoryKey: metaProducto.inventoryKey,
+            tipoHielo: it.tipoHielo,
+            cantidad: safeInt(it.cantidad, 0),
+          };
+        });
 
         console.log('[SALIDAS] payload batch', { meta, items: payloadItems });
 
-        // ✅ SIEMPRE usa batch real (hook o service) => 1 movimiento con items[]
         await registrarBatch({ ...meta, items: payloadItems });
 
         setToast({ type: 'ok', msg: '✓ Salida registrada correctamente (1 movimiento con items).' });
@@ -692,10 +710,26 @@ export default function SalidasPage() {
       }
 
       const qty = clampInt(Number(cantidad));
-      console.log('[SALIDAS] payload single', { meta, bolsaVaciaCodigo: bvCodigo, tipoHielo, cantidad: qty });
+      const metaProducto = getSalidaProductMeta(bvCodigo, tipoHielo);
 
-      // ✅ modo individual: registra una salida normal (1 movimiento)
-      await registrarSingle({ ...meta, bolsaVaciaCodigo: bvCodigo, tipoHielo, cantidad: qty });
+      console.log('[SALIDAS] payload single', {
+        meta,
+        bolsaVaciaCodigo: bvCodigo,
+        tipoHielo,
+        cantidad: qty,
+        ...metaProducto,
+      });
+
+      await registrarSingle({
+        ...meta,
+        bolsaVaciaCodigo: bvCodigo,
+        productoCodigo: metaProducto.productoCodigo,
+        productoNombre: metaProducto.productoNombre,
+        pesoKg: metaProducto.pesoKg,
+        inventoryKey: metaProducto.inventoryKey,
+        tipoHielo,
+        cantidad: qty,
+      });
 
       setToast({ type: 'ok', msg: '✓ Salida registrada correctamente.' });
       setOpenConfirm(false);
@@ -723,6 +757,7 @@ export default function SalidasPage() {
     cantidad,
     bvCodigo,
     tipoHielo,
+    getSalidaProductMeta,
     resetForm,
     clearItems,
     safeReload,
@@ -735,20 +770,22 @@ export default function SalidasPage() {
 
   useEffect(() => {
     if (!openConfirm) return;
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpenConfirm(false);
     };
+
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [openConfirm]);
 
-  // lock scroll cuando modal/slide están abiertos
   useEffect(() => {
     if (typeof document === 'undefined') return;
     if (!openConfirm && !openChoferes) return;
 
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+
     return () => {
       document.body.style.overflow = prev;
     };
@@ -756,12 +793,8 @@ export default function SalidasPage() {
 
   const cantidadUI = cantidad === '' ? '—' : String(clampInt(Number(cantidad)));
 
-  /* ============================================================
-     UI
-============================================================ */
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-cyan-50 to-blue-50">
-      {/* Header */}
       <div className="bg-gradient-to-r from-white to-cyan-50 rounded-b-3xl border-b border-cyan-200/50 shadow-xl p-6 mb-8">
         <div className="container mx-auto">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -805,7 +838,6 @@ export default function SalidasPage() {
             </div>
           </div>
 
-          {/* Toggle modo + máquina */}
           <div className="mt-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
             <div className="flex items-center gap-2 flex-wrap">
               <div className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-cyan-200 shadow-sm">
@@ -871,7 +903,6 @@ export default function SalidasPage() {
         </div>
       </div>
 
-      {/* Main */}
       <div className="container mx-auto px-4 pb-10">
         <div className="grid grid-cols-1 gap-6 mb-8">
           {(loading || authLoading) && (
@@ -910,8 +941,8 @@ export default function SalidasPage() {
                 toast.type === 'ok'
                   ? 'bg-gradient-to-r from-emerald-50 to-cyan-50 border-emerald-200'
                   : toast.type === 'info'
-                  ? 'bg-gradient-to-r from-white to-cyan-50 border-cyan-200'
-                  : 'bg-gradient-to-r from-rose-50 to-purple-50 border-rose-200',
+                    ? 'bg-gradient-to-r from-white to-cyan-50 border-cyan-200'
+                    : 'bg-gradient-to-r from-rose-50 to-purple-50 border-rose-200',
               ].join(' ')}
             >
               <div className="flex items-center gap-4">
@@ -920,8 +951,8 @@ export default function SalidasPage() {
                     toast.type === 'ok'
                       ? 'bg-gradient-to-r from-emerald-500 to-emerald-600'
                       : toast.type === 'info'
-                      ? 'bg-gradient-to-r from-cyan-500 to-blue-600'
-                      : 'bg-gradient-to-r from-rose-500 to-purple-600'
+                        ? 'bg-gradient-to-r from-cyan-500 to-blue-600'
+                        : 'bg-gradient-to-r from-rose-500 to-purple-600'
                   }`}
                 >
                   {toast.type === 'ok' ? (
@@ -944,7 +975,6 @@ export default function SalidasPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Left */}
           <div className="lg:col-span-8">
             <div className="bg-gradient-to-b from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 h-full">
               <div className="flex items-center justify-between mb-6">
@@ -1023,10 +1053,9 @@ export default function SalidasPage() {
                 </button>
               </div>
 
-              {/* Destinatario */}
               {subtipo === 'ENTREGA_TRANSPORTE' ? (
                 <div className="mb-6">
-                  <label className="text-sm font-medium text-gray-900 mb-2 block flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-900 mb-2 flex items-center gap-2">
                     <Truck className="w-4 h-4 text-cyan-600" />
                     Empleado de transporte
                   </label>
@@ -1066,7 +1095,7 @@ export default function SalidasPage() {
                 </div>
               ) : (
                 <div className="mb-6">
-                  <label className="text-sm font-medium text-gray-900 mb-2 block flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-900 mb-2 flex items-center gap-2">
                     <User className="w-4 h-4 text-purple-600" />
                     Cliente
                   </label>
@@ -1080,7 +1109,6 @@ export default function SalidasPage() {
                 </div>
               )}
 
-              {/* Observaciones */}
               <div className="mb-6">
                 <label className="text-sm font-medium text-gray-900 mb-2 block">Observaciones (opcional)</label>
                 <input
@@ -1091,7 +1119,6 @@ export default function SalidasPage() {
                 />
               </div>
 
-              {/* Editor item */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div>
                   <label className="text-sm font-medium text-gray-900 mb-2 block">Bolsa base (BV)</label>
@@ -1162,7 +1189,6 @@ export default function SalidasPage() {
                 </div>
               </div>
 
-              {/* Buttons */}
               <div className="flex flex-col sm:flex-row gap-3 justify-end pt-6 border-t border-gray-100">
                 {modoBatch && (
                   <button
@@ -1209,7 +1235,6 @@ export default function SalidasPage() {
                 </button>
               </div>
 
-              {/* Tabla batch */}
               {modoBatch && (
                 <div className="mt-6 rounded-2xl border border-cyan-200 bg-white/70 p-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
@@ -1312,7 +1337,6 @@ export default function SalidasPage() {
             </div>
           </div>
 
-          {/* Right Resumen */}
           <div className="lg:col-span-4">
             <div className="bg-gradient-to-b from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 h-full">
               <div className="flex items-center gap-3 mb-6">
@@ -1405,7 +1429,6 @@ export default function SalidasPage() {
         </div>
       </div>
 
-      {/* Confirm Modal */}
       {openConfirm && (
         <ModalShell
           title={modoBatch ? 'Confirmar salida (una sola salida)' : 'Confirmar salida'}
@@ -1513,7 +1536,6 @@ export default function SalidasPage() {
         </ModalShell>
       )}
 
-      {/* Choferes */}
       <SlideOver open={openChoferes} onClose={() => setOpenChoferes(false)} title="Seleccionar transporte">
         <div className="space-y-4">
           <div className="relative">
@@ -1569,6 +1591,7 @@ export default function SalidasPage() {
           <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
             {choferesFiltrados.map((c) => {
               const active = chofer?.id === c.id;
+
               return (
                 <button
                   key={c.id}

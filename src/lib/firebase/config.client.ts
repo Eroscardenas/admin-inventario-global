@@ -16,15 +16,17 @@ const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 
-// ✅ SOLO UNA: AutoDetect (recomendado)
 export const db = initializeFirestore(app, {
   experimentalAutoDetectLongPolling: true,
-  // ❌ NO pongas experimentalForceLongPolling aquí
 });
 
 export const storage = getStorage(app);
 
-if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+const useEmulator =
+  typeof window !== 'undefined' &&
+  process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true';
+
+if (useEmulator) {
   if (!(globalThis as any).__FIREBASE_EMU_CONNECTED__) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
     connectFirestoreEmulator(db, '127.0.0.1', 8080);
