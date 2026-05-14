@@ -52,13 +52,13 @@ import {
   ✅ CONFIG EMPRESA (edítalo a tu negocio)
 ============================================================ */
 const EMPRESA = {
-  nombre: 'Hielos (Tu Empresa)',
-  razonSocial: 'Hielos (Razón Social)',
-  rfc: 'RFC-XXXXXXX',
-  direccion: 'Dirección: Calle, Colonia, Ciudad, Estado, CP',
-  telefono: 'Tel: (XXX) XXX-XXXX',
-  correo: 'Correo: ventas@tuempresa.com',
-  sitio: 'Sitio: tuempresa.com',
+  nombre: 'Global Ice de México S.A de C.V',
+  razonSocial: 'GloballIce de México',
+  rfc: 'GIM090306HS6',
+  direccion: 'Emiliano Zapata 32, Lomas del Colli, 44490 Zapopan, Jalisco',
+  telefono: 'Tel: (33) 2131-6655',
+  correo: 'Correo: direccion@globalice.com.mx',
+  sitio: 'Sitio: globalice.com.mx',
   leyenda: 'Reporte interno — Uso exclusivo. Prohibida su reproducción sin autorización.',
 };
 

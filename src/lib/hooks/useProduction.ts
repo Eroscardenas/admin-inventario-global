@@ -208,7 +208,7 @@ type LlenarDesdeAsignacionOpts = {
   origen?: 'PRODUCCION' | 'ADMIN';
   observaciones?: string;
 
-  descontarBolsaVaciaFisica?: boolean; // default true
+  descontarBolsaVaciaFisica?: boolean; // ADMIN puede descontar físico; PRODUCCION nunca descuenta almacén
   maquina?: MaquinaId; // producción la selecciona
 };
 
@@ -551,7 +551,7 @@ export class ProductionService {
 
     const ahora = new Date();
     const origen = opts.origen ?? 'PRODUCCION';
-    const descontarBV = opts.descontarBolsaVaciaFisica !== false;
+    const descontarBV = origen === 'ADMIN' && opts.descontarBolsaVaciaFisica === true;
 
     ProductionService.#validarMaquinaSiProduccion(origen, opts.maquina);
     const maquina = opts.maquina;

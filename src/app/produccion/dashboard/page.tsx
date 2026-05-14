@@ -7,9 +7,6 @@ import { useAuthContext } from '@/context/AuthContext';
 import { useProductionStock } from '@/lib/hooks/useProductionStock';
 import { FaltantesService } from '@/lib/services/faltante.service';
 
-import { db } from '@/lib/firebase/config.client';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-
 import type { BolsaProduct, IceType } from '@/lib/utils/types/product.types';
 import { TIPOS_HIELO, ETIQUETAS_TIPO_HIELO } from '@/lib/utils/types/product.types';
 
@@ -34,57 +31,17 @@ import {
   BarChart3,
   Thermometer,
   Droplets,
-  Cuboid,
 } from 'lucide-react';
 
 /* ================= helpers ================= */
 const safeNum = (n: any, f = 0) => (Number.isFinite(Number(n)) ? Number(n) : f);
 const pct = (v: number, m: number) => (m > 0 ? Math.min(100, (v / m) * 100) : 0);
 
-const normTipo = (v: any): IceType => {
+const normTipo = (v: any): IceType | null => {
   const s = String(v ?? '').trim().toUpperCase();
-  return (TIPOS_HIELO as readonly string[]).includes(s) ? (s as IceType) : 'ROLITO';
+  return (TIPOS_HIELO as readonly string[]).includes(s) ? (s as IceType) : null;
 };
 
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-
-/**
- * ✅ MISMO FIX que admin:
- * - Si DB trae cuartosDisponibles=CONSUMIDOS y cuartosUsados=RESTANTES, lo detectamos
- * - Devolvemos disponibles/consumidos consistentes para UI
- */
-function computeCuartosUI(raw: { tot: number; cuartosDisponibles?: any; cuartosUsados?: any }) {
-  const tot = Math.max(0, Math.floor(Number(raw.tot ?? 0)));
-  const rd = Number(raw.cuartosDisponibles);
-  const ru = Number(raw.cuartosUsados);
-
-  const hasD = Number.isFinite(rd);
-  const hasU = Number.isFinite(ru);
-
-  let disponibles: number;
-
-  if (hasD && hasU) {
-    const d = clamp(Math.floor(rd), 0, tot);
-    const u = clamp(Math.floor(ru), 0, tot);
-
-    // si u == tot - d, entonces d y u están “cruzados” (legacy)
-    if (Math.abs(u - (tot - d)) <= 0) {
-      disponibles = u;
-    } else {
-      disponibles = d;
-    }
-  } else if (hasD) {
-    disponibles = clamp(Math.floor(rd), 0, tot);
-  } else if (hasU) {
-    const usados = clamp(Math.floor(ru), 0, tot);
-    disponibles = clamp(tot - usados, 0, tot);
-  } else {
-    disponibles = tot;
-  }
-
-  const consumidos = clamp(tot - disponibles, 0, tot);
-  return { tot, disponibles, consumidos };
-}
 
 /**
  * ✅ ANTI-CARDS FANTASMA:
@@ -113,7 +70,10 @@ function getTiposConfigurados(bv: BolsaProduct): IceType[] {
     if (t) buckets.push(t);
   });
 
-  const normalized = buckets.map((x) => normTipo(x)).filter(Boolean) as IceType[];
+  const normalized = buckets
+    .map((x) => normTipo(x))
+    .filter((x): x is IceType => Boolean(x));
+
   return Array.from(new Set<IceType>(normalized)); // ✅ si no hay config => []
 }
 
@@ -249,48 +209,6 @@ export default function ProductionDashboardPage() {
   // ✅ SOLO 1 listener para BV / stockPorHielo
   const { bolsasVacias, stockLlenoPorProducto, loading: stockLoading, error: stockError } = useProductionStock();
 
-  /**
-   * ✅ EXTRA: listener BARRAS para que el carrusel de producción
-   * muestre BARRA con cuartos reales (igual que admin).
-   */
-  const [barrasDocs, setBarrasDocs] = useState<any[]>([]);
-  const [barrasErr, setBarrasErr] = useState<string | null>(null);
-
-  const barrasQuery = useMemo(() => {
-    return query(collection(db, 'productos'), where('tipo', '==', 'BARRA'));
-  }, []);
-
-  useEffect(() => {
-    setBarrasErr(null);
-    const unsub = onSnapshot(
-      barrasQuery,
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-        setBarrasDocs(list);
-      },
-      (err) => {
-        console.error('barras snapshot error:', err);
-        setBarrasErr(err?.message ?? 'Error cargando barras');
-      },
-    );
-    return () => unsub();
-  }, [barrasQuery]);
-
-  const totalCuartosDisponibles = useMemo(() => {
-    return (barrasDocs ?? []).reduce((sum, b) => {
-      const cantidad = safeNum(b?.cantidad, 0);
-      const tot = Math.max(0, Math.floor(safeNum(b?.cuartosTotales, cantidad * 4)));
-
-      const { disponibles } = computeCuartosUI({
-        tot,
-        cuartosDisponibles: b?.cuartosDisponibles,
-        cuartosUsados: b?.cuartosUsados,
-      });
-
-      return sum + safeNum(disponibles, 0);
-    }, 0);
-  }, [barrasDocs]);
-
   const bolsasVaciasOptions = useMemo(() => {
     const arr = [...(bolsasVacias ?? [])];
     arr.sort((a: any, b: any) => {
@@ -307,7 +225,7 @@ export default function ProductionDashboardPage() {
   // ✅ CARDS ANTI-FANTASMA:
   // - NO inventa tipos si BV no tiene config
   // - dedupe por tipo
-  // - elimina tarjetas 0/0/0
+  // - muestra productos reales aunque estén en 0
   // - respeta config BV si existe (si no, usa SOLO p.tipos)
   const carouselCards = useMemo<CarouselCard[]>(() => {
     const cards: CarouselCard[] = [];
@@ -321,15 +239,15 @@ export default function ProductionDashboardPage() {
         new Set(
           (p.tipos ?? [])
             .map((x: any) => normTipo(x?.tipoHielo))
-            .filter(Boolean),
+            .filter((x): x is IceType => Boolean(x)),
         ),
-      ) as IceType[];
+      );
 
       if (!tiposEnStock.length) continue;
 
       // Tipos permitidos por config BV (si existe)
-      const cfg = getTiposConfigurados(bv).map((t) => normTipo(t));
-      const tiposPermitidos = cfg.length ? (tiposEnStock.filter((t) => cfg.includes(t)) as IceType[]) : tiposEnStock;
+      const cfg = getTiposConfigurados(bv);
+      const tiposPermitidos = cfg.length ? tiposEnStock.filter((t) => cfg.includes(t)) : tiposEnStock;
       if (!tiposPermitidos.length) continue;
 
       // Consolidar por tipo (si p.tipos trae duplicados)
@@ -353,10 +271,10 @@ export default function ProductionDashboardPage() {
         const min = safeNum(agg.stockMinimo, 0);
         const max = safeNum(agg.stockMaximo, 0);
 
-        const actual = tipo === 'BARRA' ? safeNum(totalCuartosDisponibles, 0) : safeNum(agg.stockActual, 0);
-
-        // ✅ filtro duro anti-fantasma (legacy incompleto)
-        if (actual === 0 && min === 0 && max === 0) continue;
+        // ✅ Stock real actual del hook.
+        // Para BARRA NO usamos cuartos usados, acumulados históricos ni listeners extra.
+        // Si el stock real viene en 0, la tarjeta SÍ se muestra como 0.
+        const actual = safeNum(agg.stockActual, 0);
 
         cards.push({
           key: `${String(p.bolsaVaciaCodigo)}-${String(tipo)}`,
@@ -384,7 +302,7 @@ export default function ProductionDashboardPage() {
     });
 
     return cards;
-  }, [stockLlenoPorProducto, bolsasVacias, totalCuartosDisponibles]);
+  }, [stockLlenoPorProducto, bolsasVacias]);
 
   /* ================== Estado: Reportar faltante ================== */
   const [faltanteOpen, setFaltanteOpen] = useState(false);
@@ -550,12 +468,6 @@ export default function ProductionDashboardPage() {
                   <span className="text-sm text-white/90">Código:</span>
                   <span className="font-mono font-bold text-white">{productionSession.codigo}</span>
                 </div>
-
-                {!!barrasErr && (
-                  <div className="mt-3 text-xs text-white/90 bg-black/20 border border-white/20 rounded-lg px-3 py-2 inline-block">
-                    ⚠️ Barras: {barrasErr}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -597,7 +509,7 @@ export default function ProductionDashboardPage() {
                 </div>
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">Resumen de Stock</h2>
-                  <p className="text-sm text-gray-500 mt-0.5">Incluye BARRA (cuartos) + bolsas llenas</p>
+                  <p className="text-sm text-gray-500 mt-0.5">Stock real actual por producto configurado</p>
                 </div>
               </div>
               <div className="text-sm text-cyan-600 font-medium">

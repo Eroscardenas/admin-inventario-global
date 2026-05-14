@@ -779,7 +779,22 @@ export class ProductionService {
 
     const ahora = new Date();
     const origen = opts.origen ?? 'PRODUCCION';
-    const descontarBV = opts.descontarBolsaVaciaFisica === true;
+
+    /**
+     * ✅ REGLA DEL FLUJO REAL:
+     *
+     * ADMIN / ASIGNACIONES ya descuenta las bolsas vacías del almacén
+     * cuando se asignan al empleado de producción.
+     *
+     * Por eso, cuando el origen es PRODUCCION, este método debe descontar
+     * SOLO la asignación pendiente y NO debe volver a validar/descontar
+     * contra productos.cantidad del almacén.
+     *
+     * Se conserva el flujo anterior para ADMIN: si origen === 'ADMIN' y
+     * descontarBolsaVaciaFisica === true, entonces sí valida y descuenta
+     * bolsas vacías físicas del producto global.
+     */
+    const descontarBV = origen === 'ADMIN' && opts.descontarBolsaVaciaFisica === true;
 
     ProductionService.#validarMaquinaSiProduccion(origen, opts.maquina);
 
@@ -1276,10 +1291,9 @@ export class ProductionService {
           motivo: opts.motivo ?? '',
           destinatario: opts.destinatario ?? '',
           observaciones: opts.observaciones ?? '',
-
           usuarioCodigo: opts.usuarioCodigo,
           usuarioNombre: opts.usuarioNombre ?? '',
-
+          
           empleadoAsignadoCodigo: empleadoCodigo,
           empleadoAsignadoNombre: empleadoNombre,
 

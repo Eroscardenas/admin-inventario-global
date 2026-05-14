@@ -26,6 +26,10 @@ export interface AsignacionUI {
 
   estado?: 'PENDIENTE' | 'COMPLETADA' | 'CANCELADA' | string;
 
+  cosechaId?: string;     // ID de la cosecha vinculada
+  cosechaCodigo?: string; // Código legible de la cosecha
+  stockAjustado?: boolean; // true = admin ya descontó stock al crear la asignación
+
   fechaAsignacion?: Date;
   createdAt: Date;
   updatedAt?: Date;
@@ -88,6 +92,10 @@ export function useMyAssignments(empleadoCodigo?: string) {
             tipoHielo: data.tipoHielo ?? undefined,
 
             estado: (data.estado ?? 'PENDIENTE') as any,
+
+            cosechaId:     data.cosechaId     ? String(data.cosechaId)     : undefined,
+            cosechaCodigo: data.cosechaCodigo ? String(data.cosechaCodigo) : undefined,
+            stockAjustado: data.stockAjustado === true ? true : undefined,
 
             fechaAsignacion: data.fechaAsignacion ? toDateSafe(data.fechaAsignacion) : undefined,
             createdAt: toDateSafe(data.createdAt),

@@ -42,11 +42,13 @@ import {
 
 // ============ helpers ============
 const onlyDigitsOrEmpty = (v: string) => v === '' || /^\d+$/.test(v);
+
 const toIntOrNull = (v: string) => {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n) || n <= 0) return null;
   return n;
 };
+
 const safeInt0 = (v: any) => {
   const n = Math.floor(Number(v));
   return Number.isFinite(n) ? n : 0;
@@ -93,11 +95,14 @@ const StatCard = ({
             </span>
           )}
         </div>
+
         <p className="text-3xl font-bold text-white mb-1">
           {typeof value === 'number' ? value.toLocaleString() : value}
         </p>
+
         {subtitle && <p className="text-xs text-white/70 mt-2 opacity-90">{subtitle}</p>}
       </div>
+
       <div className={`p-3 rounded-xl ${color.split(' ')[1]} bg-opacity-30 backdrop-blur-sm ml-4`}>
         <Icon className="h-7 w-7 text-white" />
       </div>
@@ -109,12 +114,38 @@ const StatCard = ({
 const IceTypeChip = ({ tipo, onRemove }: { tipo: IceType; onRemove?: () => void }) => {
   const getIceTypeInfo = (type: IceType) => {
     const types: Record<IceType, { label: string; color: string; icon: LucideIcon; desc?: string }> = {
-      BARRA: { label: 'Barra', color: 'bg-gradient-to-r from-purple-600 to-purple-700', icon: Box, desc: 'Barra' },
-      ROLITO: { label: 'Rolito', color: 'bg-gradient-to-r from-blue-800 to-blue-900', icon: Snowflake, desc: 'Rolito' },
-      FRAPPE: { label: 'Frappé', color: 'bg-gradient-to-r from-pink-800 to-pink-900', icon: Snowflake, desc: 'Frappe' },
-      GOURMET: { label: 'Gourmet', color: 'bg-gradient-to-r from-sky-600 to-sky-700', icon: Snowflake, desc: 'Premium' },
-      ENFRIAR: { label: 'Enfriar', color: 'bg-gradient-to-r from-blue-600 to-blue-700', icon: Thermometer, desc: 'Para Enfriar' },
+      BARRA: {
+        label: 'Barra',
+        color: 'bg-gradient-to-r from-purple-600 to-purple-700',
+        icon: Box,
+        desc: 'Barra',
+      },
+      ROLITO: {
+        label: 'Rolito',
+        color: 'bg-gradient-to-r from-blue-800 to-blue-900',
+        icon: Snowflake,
+        desc: 'Rolito',
+      },
+      FRAPPE: {
+        label: 'Frappé',
+        color: 'bg-gradient-to-r from-pink-800 to-pink-900',
+        icon: Snowflake,
+        desc: 'Frappe',
+      },
+      GOURMET: {
+        label: 'Gourmet',
+        color: 'bg-gradient-to-r from-sky-600 to-sky-700',
+        icon: Snowflake,
+        desc: 'Premium',
+      },
+      ENFRIAR: {
+        label: 'Enfriar',
+        color: 'bg-gradient-to-r from-blue-600 to-blue-700',
+        icon: Thermometer,
+        desc: 'Para Enfriar',
+      },
     };
+
     return types[type];
   };
 
@@ -154,7 +185,15 @@ export default function AlmacenPage() {
   const { user } = useAuthContext();
 
   // ✅ Hook real
-  const { products, loading, error, reload, crearBolsaVacia: crearBolsaVaciaHook, actualizarCantidad } = useProducts();
+  const {
+    products,
+    loading,
+    error,
+    reload,
+    crearBolsaVacia: crearBolsaVaciaHook,
+    actualizarCantidad,
+    actions,
+  } = useProducts();
 
   // 🎯 ESTADOS
   const [showModal, setShowModal] = useState(false);
@@ -181,9 +220,13 @@ export default function AlmacenPage() {
 
   // ✅ ALMACÉN = SOLO INSUMOS (BOLSAS VACÍAS)
   const bolsasVacias = useMemo(() => {
-    return (products ?? []).filter(
-      (p) => p.tipo === 'BOLSA' && (p as BolsaProduct).status === 'VACIA'
-    ) as BolsaProduct[];
+    return (products ?? []).filter((p) => {
+      const tipo = String((p as any).tipo ?? '').toUpperCase();
+      const status = String((p as any).status ?? '').toUpperCase();
+      const codigo = String((p as any).codigo ?? '').toUpperCase();
+
+      return tipo === 'BOLSA' && (status === 'VACIA' || codigo.startsWith('BV'));
+    }) as BolsaProduct[];
   }, [products]);
 
   // 📊 STATS
@@ -245,6 +288,7 @@ export default function AlmacenPage() {
     if (product) {
       const bolsa = product as BolsaProduct;
       const cant = product.cantidad != null ? String(safeInt0(product.cantidad)) : '';
+
       setBolsaForm({
         nombre: product.nombre ?? '',
         cantidad: cant === '0' ? '' : cant,
@@ -269,7 +313,7 @@ export default function AlmacenPage() {
     setBolsaForm((prev) => ({ ...prev, tiposHielo: prev.tiposHielo.filter((t) => t !== tipo) }));
   };
 
-  // 💾 Guardar bolsa (crear o actualizar cantidad)
+  // 💾 Guardar bolsa (crear o actualizar cantidad + config)
   const guardarBolsa = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!user) return alert('Usuario no autenticado');
@@ -280,19 +324,42 @@ export default function AlmacenPage() {
     if (!cantidad) return alert('Ingresa una cantidad válida');
 
     setIsProcessing(true);
+
     try {
       const usuarioNombre = (user as any).nombre || user.email || 'Usuario';
 
+      const tiposHieloPermitidos = bolsaForm.tiposHielo.length
+        ? bolsaForm.tiposHielo
+        : undefined;
+
       if (editingProduct) {
-        await actualizarCantidad(editingProduct.codigo || '', cantidad);
+        const codigo = String(editingProduct.codigo || '').trim().toUpperCase();
+        if (!codigo) throw new Error('Código de bolsa inválido');
+
+        await actualizarCantidad(codigo, cantidad);
+
+        const actualizarConfig = (actions as any)?.actualizarBolsaVaciaConfig;
+        if (typeof actualizarConfig !== 'function') {
+          throw new Error(
+            'Falta exponer actualizarBolsaVaciaConfig en useProducts.ts dentro de actions.',
+          );
+        }
+
+        await actualizarConfig({
+          codigo,
+          nombre: bolsaForm.nombre.trim(),
+          pesoKg: bolsaForm.pesoKg,
+          tiposHieloPermitidos,
+        });
+
         alert(`✅ Bolsa "${bolsaForm.nombre}" actualizada: ${cantidad} unidades`);
       } else {
         await crearBolsaVaciaHook({
-          nombre: bolsaForm.nombre,
+          nombre: bolsaForm.nombre.trim(),
           cantidad,
           creadoPor: usuarioNombre,
           pesoKg: bolsaForm.pesoKg,
-          tiposHieloPermitidos: bolsaForm.tiposHielo.length ? bolsaForm.tiposHielo : undefined,
+          tiposHieloPermitidos,
         });
 
         alert(`✅ Bolsa vacía "${bolsaForm.nombre}" creada: ${cantidad} unidades`);
@@ -302,6 +369,7 @@ export default function AlmacenPage() {
 
       setShowModal(false);
       setEditingProduct(null);
+      setShowIceTypeSelector(false);
       setBolsaForm({ nombre: '', cantidad: '', pesoKg: 3, tiposHielo: [] });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido';
@@ -317,11 +385,12 @@ export default function AlmacenPage() {
     if (!user) return;
 
     const confirmacion = window.confirm(
-      `¿Estás seguro de eliminar "${product.nombre}"?\n\nEsta acción marcará el producto como sin stock (cantidad = 0).`
+      `¿Estás seguro de eliminar "${product.nombre}"?\n\nEsta acción marcará el producto como sin stock (cantidad = 0).`,
     );
     if (!confirmacion) return;
 
     setIsProcessing(true);
+
     try {
       await actualizarCantidad(product.codigo || '', 0);
       await reloadTodo();
@@ -338,6 +407,7 @@ export default function AlmacenPage() {
   const verDetalle = (product: Product) => {
     const bolsa = product as BolsaProduct;
     const tiposHielo = (bolsa as any).tiposHieloPermitidos?.join(', ') || 'No definidos';
+
     alert(
       `📋 DETALLE DE INSUMO (BOLSA VACÍA)\n\n` +
         `Nombre: ${bolsa.nombre}\n` +
@@ -346,7 +416,7 @@ export default function AlmacenPage() {
         `Peso: ${(bolsa as any).pesoKg || 3}kg\n` +
         `Estado: ${(bolsa as any).status || 'VACIA'}\n` +
         `Tipos de hielo permitidos: ${tiposHielo}\n` +
-        `Última modificación: ${(bolsa as any).ultimaModificacion?.toLocaleString?.('es-MX') || 'N/A'}\n`
+        `Última modificación: ${(bolsa as any).ultimaModificacion?.toLocaleString?.('es-MX') || 'N/A'}\n`,
     );
   };
 
@@ -465,6 +535,7 @@ export default function AlmacenPage() {
               <div className="p-3 bg-gradient-to-br from-orange-800/40 to-orange-700/30 rounded-xl">
                 <AlertTriangle className="h-7 w-7 text-orange-300" />
               </div>
+
               <div className="flex-1">
                 <div className="flex items-center justify-between">
                   <div>
@@ -473,6 +544,7 @@ export default function AlmacenPage() {
                       {alertasStockBajo.length} insumo(s) necesitan reabastecimiento inmediato
                     </p>
                   </div>
+
                   <span className="px-3 py-1 bg-gradient-to-r from-red-800/60 to-amber-800/40 text-red-300 rounded-full text-sm font-medium">
                     Urgente
                   </span>
@@ -489,8 +561,10 @@ export default function AlmacenPage() {
                           <Box className="h-3.5 w-3.5 text-blue-300" />
                           <span className="text-white text-sm truncate">{product.nombre}</span>
                         </div>
+
                         <span className="text-red-400 font-bold text-lg">{Number(product.cantidad ?? 0)}</span>
                       </div>
+
                       <div className="text-xs text-blue-200/80 mt-2 flex justify-between">
                         <span>Stock mínimo: {Number((product as any).stockMinimo ?? 10)}</span>
                         <span className="text-red-300">
@@ -515,6 +589,7 @@ export default function AlmacenPage() {
             color="from-blue-900/40 to-blue-800/30"
             onClick={() => setFilterType('BOLSA')}
           />
+
           <StatCard
             title="Stock Bajo"
             value={stats.alertasBajoStock}
@@ -539,6 +614,7 @@ export default function AlmacenPage() {
                   disabled={isProcessing}
                   className="w-full pl-12 pr-10 py-3.5 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-transparent backdrop-blur-sm transition-all duration-300"
                 />
+
                 {searchTerm && (
                   <button
                     type="button"
@@ -593,15 +669,23 @@ export default function AlmacenPage() {
                     disabled
                   />
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm text-gray-400">Estado</label>
-                  <select className="w-full px-3 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white" disabled>
+                  <select
+                    className="w-full px-3 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white"
+                    disabled
+                  >
                     <option>Todos</option>
                   </select>
                 </div>
+
                 <div className="space-y-2">
                   <label className="text-sm text-gray-400">Ordenar por</label>
-                  <select className="w-full px-3 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white" disabled>
+                  <select
+                    className="w-full px-3 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg text-white"
+                    disabled
+                  >
                     <option>Stock (descendente)</option>
                   </select>
                 </div>
@@ -654,12 +738,15 @@ export default function AlmacenPage() {
                           <Warehouse className="h-24 w-24 text-gray-700 mx-auto mb-4 opacity-50" />
                           <div className="absolute inset-0 bg-gradient-to-br from-gray-800/20 to-transparent rounded-full"></div>
                         </div>
+
                         <h3 className="text-xl font-bold text-gray-300 mb-2">No se encontraron bolsas vacías</h3>
+
                         <p className="text-gray-500 mb-6">
                           {searchTerm || filterType !== 'TODOS'
                             ? 'No hay insumos que coincidan con tu búsqueda'
                             : 'Empieza agregando bolsas vacías'}
                         </p>
+
                         <button
                           type="button"
                           onClick={() => abrirModalBolsa()}
@@ -679,12 +766,14 @@ export default function AlmacenPage() {
                     const isOutOfStock = cantidad === 0;
 
                     const bolsaProduct = product as BolsaProduct;
-                    const tiposHielo = ((bolsaProduct as any)?.tiposHieloPermitidos || []) as IceType[];
+                    const tiposHielo = (((bolsaProduct as any)?.tiposHieloPermitidos || []) as IceType[]).filter(Boolean);
 
                     return (
                       <tr
                         key={product.codigo}
-                        className={`hover:bg-gray-800/30 transition-all duration-200 ${isOutOfStock ? 'opacity-70' : ''}`}
+                        className={`hover:bg-gray-800/30 transition-all duration-200 ${
+                          isOutOfStock ? 'opacity-70' : ''
+                        }`}
                       >
                         <td className="px-6 py-5">
                           <div className="flex items-center">
@@ -695,12 +784,14 @@ export default function AlmacenPage() {
                             <div>
                               <div className="font-semibold text-white flex items-center gap-2">
                                 <span className="truncate max-w-xs">{product.nombre}</span>
+
                                 {isLowStock && (
                                   <span className="px-2.5 py-1 bg-gradient-to-r from-red-900/40 to-red-800/30 text-red-300 text-xs rounded-full whitespace-nowrap">
                                     ¡Bajo stock!
                                   </span>
                                 )}
                               </div>
+
                               <div className="text-xs mt-2 flex items-center gap-2">
                                 <span className="text-gray-400">Código:</span>
                                 <code className="text-gray-300 font-mono bg-gray-900/50 px-2 py-1 rounded-md">
@@ -717,13 +808,16 @@ export default function AlmacenPage() {
                               <Scale className="h-5 w-5 text-gray-400 mr-3" />
                               <div>
                                 <div className="text-gray-300">Peso</div>
-                                <div className="font-bold text-white text-lg">{(bolsaProduct as any)?.pesoKg || 3}kg</div>
+                                <div className="font-bold text-white text-lg">
+                                  {(bolsaProduct as any)?.pesoKg || 3}kg
+                                </div>
                               </div>
                             </div>
 
                             {tiposHielo.length > 0 && (
                               <div className="space-y-2">
                                 <div className="text-xs text-gray-400 uppercase tracking-wider">Tipos permitidos</div>
+
                                 <div className="flex flex-wrap gap-2">
                                   {tiposHielo.map((tipo, idx) => (
                                     <IceTypeChip key={`${tipo}-${idx}`} tipo={tipo} />
@@ -834,6 +928,7 @@ export default function AlmacenPage() {
           if (isProcessing) return;
           setShowModal(false);
           setEditingProduct(null);
+          setShowIceTypeSelector(false);
           setBolsaForm({ nombre: '', cantidad: '', pesoKg: 3, tiposHielo: [] });
         }}
         title={editingProduct ? '✏️ Editar Bolsa Vacía' : '🛍️ Nueva Bolsa Vacía'}
@@ -847,6 +942,7 @@ export default function AlmacenPage() {
                   <label className="block text-sm font-medium text-gray-300 mb-3">
                     Nombre de la Bolsa <span className="text-red-400">*</span>
                   </label>
+
                   <input
                     type="text"
                     value={bolsaForm.nombre}
@@ -863,6 +959,7 @@ export default function AlmacenPage() {
                     <label className="block text-sm font-medium text-gray-300 mb-3">
                       Cantidad de Bolsas <span className="text-red-400">*</span>
                     </label>
+
                     <div className="relative">
                       <input
                         type="text"
@@ -876,57 +973,62 @@ export default function AlmacenPage() {
                         }}
                         required
                         disabled={isProcessing}
-                        className="placeholder:text-xs placeholder:font-medium w-full px-4 py-3.5 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white text-2xl font-bold text-center disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent backdrop-blur-sm"
+                        className="w-full px-4 py-3.5 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent backdrop-blur-sm"
                       />
-                      <div className="absolute right-4 top-3.5 text-gray-400 text-sm">unid.</div>
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Capacidad (Peso) <span className="text-red-400">*</span>
+                      Peso / Capacidad KG <span className="text-red-400">*</span>
                     </label>
-                    <select
-                      value={bolsaForm.pesoKg}
-                      onChange={(e) => setBolsaForm((p) => ({ ...p, pesoKg: parseInt(e.target.value) }))}
-                      disabled={isProcessing}
-                      className="w-full px-4 py-3.5 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent backdrop-blur-sm"
-                      required
-                    >
-                      <option value="1">1 kg</option>
-                      <option value="3">3 kg</option>
-                      <option value="5">5 kg</option>
-                      <option value="10">10 kg</option>
-                      <option value="15">15 kg</option>
-                      <option value="20">20 kg</option>
-                    </select>
+
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min={1}
+                        value={bolsaForm.pesoKg}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          setBolsaForm((p) => ({
+                            ...p,
+                            pesoKg: Number.isFinite(n) && n > 0 ? n : 3,
+                          }));
+                        }}
+                        required
+                        disabled={isProcessing}
+                        className="w-full px-4 py-3.5 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white placeholder-gray-500 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent backdrop-blur-sm"
+                      />
+                    </div>
                   </div>
                 </div>
 
-                {/* Tipos de hielo */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-sm font-medium text-gray-300">
-                      Tipos de Hielo Permitidos (Opcional)
-                    </label>
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300">Tipos de hielo permitidos</label>
+                      <p className="text-xs text-gray-500 mt-1">Define qué tipos puede llenar esta bolsa.</p>
+                    </div>
+
                     <button
                       type="button"
                       onClick={() => setShowIceTypeSelector(true)}
                       disabled={isProcessing}
-                      className="px-4 py-2 bg-gradient-to-r from-blue-900/40 to-blue-800/30 text-blue-400 hover:text-blue-300 hover:from-blue-800/40 hover:to-blue-700/30 rounded-lg text-sm flex items-center disabled:opacity-50 transition-all duration-300"
+                      className="px-4 py-2.5 bg-gradient-to-r from-blue-700/80 to-blue-800/80 text-white rounded-xl font-medium hover:from-blue-800 hover:to-blue-900 disabled:opacity-50 flex items-center transition-all duration-300"
                     >
-                      <Plus className="h-3.5 w-3.5 mr-1.5" />
+                      <Plus className="h-4 w-4 mr-2" />
                       Agregar tipo
                     </button>
                   </div>
 
                   {bolsaForm.tiposHielo.length > 0 ? (
-                    <div className="p-5 bg-gray-900/40 rounded-xl border border-gray-700/50">
+                    <div className="p-5 bg-gray-900/30 rounded-xl border border-gray-700/50">
                       <div className="flex flex-wrap gap-2">
                         {bolsaForm.tiposHielo.map((tipo, idx) => (
                           <IceTypeChip key={`${tipo}-${idx}`} tipo={tipo} onRemove={() => removerTipoHielo(tipo)} />
                         ))}
                       </div>
+
                       <p className="text-xs text-gray-500 mt-4 flex items-center gap-2">
                         <Info className="h-3.5 w-3.5" />
                         La bolsa solo podrá ser llenada con estos tipos de hielo
@@ -948,6 +1050,7 @@ export default function AlmacenPage() {
                   onClick={() => {
                     setShowModal(false);
                     setEditingProduct(null);
+                    setShowIceTypeSelector(false);
                     setBolsaForm({ nombre: '', cantidad: '', pesoKg: 3, tiposHielo: [] });
                   }}
                   disabled={isProcessing}
@@ -993,67 +1096,39 @@ export default function AlmacenPage() {
               {(['ROLITO', 'FRAPPE', 'GOURMET', 'ENFRIAR', 'BARRA'] as IceType[]).map((tipo) => {
                 const isSelected = bolsaForm.tiposHielo.includes(tipo);
 
-                const desc = (() => {
-                  switch (tipo) {
-                    case 'BARRA':
-                      return 'Barra de hielo';
-                    case 'ROLITO':
-                      return 'Hielo en Rolito';
-                    case 'FRAPPE':
-                      return 'Hielo en Frappe';
-                    case 'GOURMET':
-                      return 'Hielo premium';
-                    case 'ENFRIAR':
-                      return 'Rolito para enfriamiento';
-                    default:
-                      return '';
-                  }
-                })();
-
-                const bgColor = isSelected
-                  ? 'bg-gradient-to-r from-blue-900/50 to-blue-800/40 border-blue-500'
-                  : 'bg-gray-900/50 border-gray-700 hover:bg-gray-800/60 hover:border-gray-600';
-
                 return (
                   <button
                     key={tipo}
                     type="button"
-                    onClick={() => (isSelected ? removerTipoHielo(tipo) : agregarTipoHielo(tipo))}
-                    className={`w-full p-4 rounded-xl border-2 flex items-center justify-between transition-all duration-300 ${bgColor}`}
+                    onClick={() => {
+                      if (isSelected) {
+                        removerTipoHielo(tipo);
+                      } else {
+                        agregarTipoHielo(tipo);
+                      }
+                    }}
+                    disabled={isProcessing}
+                    className={`w-full p-4 rounded-xl border transition-all duration-300 flex items-center justify-between ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-blue-900/50 to-blue-800/30 border-blue-600/50 text-white'
+                        : 'bg-gray-900/40 border-gray-700/50 text-gray-300 hover:bg-gray-800/50 hover:border-gray-600'
+                    }`}
                   >
-                    <div className="flex items-center">
-                      <div className={`p-2.5 rounded-lg mr-4 ${isSelected ? 'bg-blue-800/60' : 'bg-gray-800/60'}`}>
-                        {tipo === 'BARRA' ? (
-                          <Box className="h-5 w-5 text-purple-300" />
-                        ) : (
-                          <Snowflake className="h-5 w-5 text-blue-300" />
-                        )}
-                      </div>
-                      <div className="text-left">
-                        <div className="font-bold text-white">{tipo}</div>
-                        <div className="text-xs text-gray-400 mt-1">{desc}</div>
-                      </div>
-                    </div>
-
-                    {isSelected ? (
-                      <div className="p-1.5 bg-gradient-to-r from-green-700 to-green-600 rounded-full">
-                        <Check className="h-4 w-4 text-white" />
-                      </div>
-                    ) : (
-                      <div className="h-5 w-5 rounded-full border-2 border-gray-500" />
-                    )}
+                    <IceTypeChip tipo={tipo} />
+                    {isSelected && <Check className="h-5 w-5 text-green-400" />}
                   </button>
                 );
               })}
             </div>
 
-            <div className="mt-8 pt-6 border-t border-gray-700/50">
+            <div className="flex justify-end gap-3 mt-8 pt-6 border-t border-gray-700/50">
               <button
                 type="button"
                 onClick={() => setShowIceTypeSelector(false)}
-                className="w-full px-4 py-3 text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-xl transition-all duration-300"
+                disabled={isProcessing}
+                className="px-6 py-3 text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-xl font-medium disabled:opacity-50 transition-all duration-300"
               >
-                Cerrar
+                Listo
               </button>
             </div>
           </div>

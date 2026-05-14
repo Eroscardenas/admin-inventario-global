@@ -693,31 +693,34 @@ export function useProducts() {
   /* ---------------------------
      Actions (services)
   ---------------------------- */
-  const actions = {
-    crearBarra: ProductService.crearBarra,
-    crearBolsaVacia: ProductService.crearBolsaVacia,
-    actualizarCantidadProducto: ProductService.actualizarCantidadProducto,
+const actions = {
+  crearBarra: ProductService.crearBarra,
+  crearBolsaVacia: ProductService.crearBolsaVacia,
+  actualizarCantidadProducto: ProductService.actualizarCantidadProducto,
 
-    actualizarCuartosDesdeBarras: ProductService.actualizarCuartosDesdeBarras,
-    actualizarConfigStockPorHielo: ProductService.actualizarConfigStockPorHielo,
-    eliminarProducto: ProductService.eliminarProducto,
+  // ✅ NUEVO: necesario para que Almacén guarde nombre, peso y tiposHieloPermitidos
+  actualizarBolsaVaciaConfig: ProductService.actualizarBolsaVaciaConfig,
 
-    llenarDesdeAdminStockPorHielo: ProductService.llenarDesdeAdminStockPorHielo,
-    agregarProduccionBarra,
+  actualizarCuartosDesdeBarras: ProductService.actualizarCuartosDesdeBarras,
+  actualizarConfigStockPorHielo: ProductService.actualizarConfigStockPorHielo,
+  eliminarProducto: ProductService.eliminarProducto,
 
-    // producción (inventario real)
-    llenarStockDesdeBolsaVacia: ProductionService.llenarStockDesdeBolsaVacia,
-    llenarDesdeAsignacion: ProductionService.llenarDesdeAsignacion,
-    registrarSalidaStock: ProductionService.registrarSalidaStock,
-    registrarSalidaStockBatch: ProductionService.registrarSalidaStockBatch,
-    registrarDevolucionStock: ProductionService.registrarDevolucionStock,
-    registrarMermaStock: ProductionService.registrarMermaStock,
+  llenarDesdeAdminStockPorHielo: ProductService.llenarDesdeAdminStockPorHielo,
+  agregarProduccionBarra,
 
-    // reportes
-    obtenerMovimientosRecientes: ReportsService.obtenerMovimientosRecientes,
-    obtenerProduccionDelDia: (fecha?: Date): Promise<ReporteProduccionDiaria> =>
-      ReportsService.generarReporteProduccionDiaria(fecha ?? new Date()),
-  };
+  // producción (inventario real)
+  llenarStockDesdeBolsaVacia: ProductionService.llenarStockDesdeBolsaVacia,
+  llenarDesdeAsignacion: ProductionService.llenarDesdeAsignacion,
+  registrarSalidaStock: ProductionService.registrarSalidaStock,
+  registrarSalidaStockBatch: ProductionService.registrarSalidaStockBatch,
+  registrarDevolucionStock: ProductionService.registrarDevolucionStock,
+  registrarMermaStock: ProductionService.registrarMermaStock,
+
+  // reportes
+  obtenerMovimientosRecientes: ReportsService.obtenerMovimientosRecientes,
+  obtenerProduccionDelDia: (fecha?: Date): Promise<ReporteProduccionDiaria> =>
+    ReportsService.generarReporteProduccionDiaria(fecha ?? new Date()),
+};
 
   /* ============================================================
      ✅ COSECHAS HELPERS

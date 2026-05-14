@@ -1602,9 +1602,6 @@ export default function InventarioAdminPage() {
                 <span>
                   Disponibles: <span className="font-bold text-emerald-200">{totalCuartosDisponibles}</span>
                 </span>
-                <span>
-                  Usados: <span className="font-bold text-amber-200">{totalCuartosUsados}</span>
-                </span>
               </div>
             </div>
 
@@ -1685,10 +1682,6 @@ export default function InventarioAdminPage() {
                         <div className="bg-gray-900/30 rounded-lg p-3 text-center">
                           <div className="text-[11px] text-gray-400">Disponibles</div>
                           <div className="text-lg font-bold text-emerald-300 tabular-nums">{disp}</div>
-                        </div>
-                        <div className="bg-gray-900/30 rounded-lg p-3 text-center">
-                          <div className="text-[11px] text-gray-400">Usados</div>
-                          <div className="text-lg font-bold text-amber-300 tabular-nums">{usados}</div>
                         </div>
                       </div>
 

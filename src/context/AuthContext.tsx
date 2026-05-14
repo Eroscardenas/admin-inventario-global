@@ -27,16 +27,18 @@ import { db, auth } from '@/lib/firebase/config.client';
 import { COLECCIONES } from '@/lib/firebase/firestore';
 
 // ===============================
-// Tab ID (por pestaña)
+// Session Keys
 // ===============================
 const TAB_ID =
   typeof window !== 'undefined'
     ? `tab-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
     : 'server-tab';
 
-// ✅ Admin persistente (global) + Empleado por pestaña
+// ✅ Admin persistente + empleado persistente.
+// IMPORTANTE: PROD_KEY ya NO depende de TAB_ID.
+// Antes cambiaba en cada reload/montaje y por eso producción perdía sesión.
 const ADMIN_KEY = 'hielo_admin_session';
-const PROD_KEY = `hielo_production_session_${TAB_ID}`;
+const PROD_KEY = 'hielo_production_session';
 
 // ✅ Cache empleados (para listados admin)
 const EMP_CACHE_KEY = 'hielo_empleados_cache_v1';
@@ -237,75 +239,115 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [empleados, setEmpleados] = useState<AuthUserBase[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const isAdminRoute = useMemo(() => pathname.startsWith('/admin'), [pathname]);
 
   // ===============================
-  // Load sessions (init)
-  // ⚠️ CAMBIO CLAVE:
-  // - Admin: solo se hidrata si estás en /admin
-  // - Producción: por pestaña, siempre aplica
+  // Load sessions (SOLO al montar)
   // ===============================
   useEffect(() => {
+    let cancelled = false;
+
     const loadSessions = () => {
       try {
-        devLog(`🆔 Pestaña ${TAB_ID} cargando sesiones...`, { pathname });
+        setLoading(true);
+        devLog(`🆔 Cargando sesiones iniciales...`, { pathname, tabId: TAB_ID });
 
-        // ✅ Admin SOLO si ruta /admin (evita auto-login en /produccion/login)
-        if (isAdminRoute) {
-          const savedAdmin = localStorage.getItem(ADMIN_KEY);
-          if (savedAdmin) {
-            const parsed = sanitizeSession(JSON.parse(savedAdmin));
-            if (parsed?.role === 'ADMIN') {
-              setAdminSession(parsed as AdminSession);
-              devLog('✅ Sesión admin cargada (solo /admin)');
-            } else {
-              localStorage.removeItem(ADMIN_KEY);
-            }
+        // ✅ Admin persistente. No lo apagamos al navegar fuera de /admin.
+        const savedAdmin = localStorage.getItem(ADMIN_KEY);
+        if (savedAdmin) {
+          const parsed = sanitizeSession(JSON.parse(savedAdmin));
+          if (parsed?.role === 'ADMIN') {
+            if (!cancelled) setAdminSession(parsed as AdminSession);
+            setCookie(ADMIN_USER_COOKIE, JSON.stringify({ id: parsed.id, role: parsed.role, nombre: parsed.nombre }), 2);
+          } else {
+            localStorage.removeItem(ADMIN_KEY);
+            if (!cancelled) setAdminSession(null);
           }
-        } else {
-          // ✅ Muy importante: NO borramos localStorage, solo “desactivamos” admin en rutas no-admin
+        } else if (!cancelled) {
           setAdminSession(null);
         }
 
-        // ✅ Producción (por pestaña)
-        const savedProduction = sessionStorage.getItem(PROD_KEY);
+        // ✅ Producción persistente.
+        // NO depende de TAB_ID, NO se borra con beforeunload y NO se recarga en cada ruta.
+        const savedProduction = localStorage.getItem(PROD_KEY);
         if (savedProduction) {
           const parsed = sanitizeSession(JSON.parse(savedProduction));
 
           const isProd =
-            parsed?.tabId === TAB_ID &&
             ROLES_EMPLEADO_PERMITIDOS.includes(parsed.role as EmpleadoRole) &&
             typeof parsed.codigo === 'string' &&
-            parsed.codigo.trim().length > 0;
+            parsed.codigo.trim().length > 0 &&
+            parsed.isActive !== false;
 
           if (isProd) {
-            setProductionSession(parsed as ProductionSession);
-            devLog('✅ Sesión empleado cargada (esta pestaña)');
+            if (!cancelled) setProductionSession(parsed as ProductionSession);
+            setCookie(PROD_COOKIE, JSON.stringify({ role: parsed.role, codigo: parsed.codigo }), 2);
+            devLog('✅ Sesión producción cargada');
           } else {
-            devWarn('⚠️ Sesión empleado inválida/otra pestaña, ignorando');
-            sessionStorage.removeItem(PROD_KEY);
+            devWarn('⚠️ Sesión producción inválida, limpiando');
+            localStorage.removeItem(PROD_KEY);
+            deleteCookie(PROD_COOKIE);
+            if (!cancelled) setProductionSession(null);
           }
+        } else if (!cancelled) {
+          setProductionSession(null);
         }
       } catch (error) {
         devError('Error loading sessions:', error);
+        localStorage.removeItem(PROD_KEY);
+        deleteCookie(PROD_COOKIE);
+        if (!cancelled) setProductionSession(null);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadSessions();
 
-    // ✅ Al cerrar pestaña: SOLO limpiar sesión empleado (admin persiste)
-    const handleBeforeUnload = () => {
-      devLog(`🧹 Limpiando sesión empleado de pestaña ${TAB_ID}`);
-      sessionStorage.removeItem(PROD_KEY);
-      // Cookie prod se borra en logoutProduction / clearCache.
+    return () => {
+      cancelled = true;
+    };
+    // IMPORTANTE: no depende de pathname. Si depende de pathname, al moverte entre páginas
+    // vuelve a poner loading=true y algunos guards alcanzan a redirigir al login.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ===============================
+  // Sync entre pestañas del mismo dominio
+  // ===============================
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === PROD_KEY) {
+        if (!event.newValue) {
+          setProductionSession(null);
+          deleteCookie(PROD_COOKIE);
+          return;
+        }
+        try {
+          const parsed = sanitizeSession(JSON.parse(event.newValue));
+          if (ROLES_EMPLEADO_PERMITIDOS.includes(parsed.role as EmpleadoRole) && parsed.codigo) {
+            setProductionSession(parsed as ProductionSession);
+            setCookie(PROD_COOKIE, JSON.stringify({ role: parsed.role, codigo: parsed.codigo }), 2);
+          }
+        } catch {}
+      }
+
+      if (event.key === ADMIN_KEY) {
+        if (!event.newValue) {
+          setAdminSession(null);
+          deleteCookie(ADMIN_AUTH_COOKIE);
+          deleteCookie(ADMIN_USER_COOKIE);
+          return;
+        }
+        try {
+          const parsed = sanitizeSession(JSON.parse(event.newValue));
+          if (parsed.role === 'ADMIN') setAdminSession(parsed as AdminSession);
+        } catch {}
+      }
     };
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    // 👇 re-ejecuta cuando cambia la ruta (clave para activar admin solo en /admin)
-  }, [isAdminRoute, pathname]);
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   // ===============================
   // LOGIN ADMIN (Firebase Auth + Firestore) + Cookies p/ Middleware
@@ -466,7 +508,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setProductionSession(sessionUser);
 
-        sessionStorage.setItem(PROD_KEY, JSON.stringify(sessionUser));
+        localStorage.setItem(PROD_KEY, JSON.stringify(sessionUser));
 
         setCookie(PROD_COOKIE, JSON.stringify({ role: sessionUser.role, codigo: sessionUser.codigo }), 2);
 
@@ -504,7 +546,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     devLog(`👋 [Tab ${TAB_ID}] Cerrando sesión empleado`);
     setProductionSession(null);
 
-    sessionStorage.removeItem(PROD_KEY);
+    localStorage.removeItem(PROD_KEY);
 
     deleteCookie(PROD_COOKIE);
   }, []);
@@ -649,7 +691,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     setProductionSession(updated);
-    sessionStorage.setItem(PROD_KEY, JSON.stringify(updated));
+    localStorage.setItem(PROD_KEY, JSON.stringify(updated));
   }, [productionSession]);
 
   // ===============================
@@ -657,7 +699,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ===============================
   const clearCache = useCallback(() => {
     localStorage.removeItem(ADMIN_KEY);
-    sessionStorage.removeItem(PROD_KEY);
+    localStorage.removeItem(PROD_KEY);
     localStorage.removeItem(EMP_CACHE_KEY);
 
     setAdminSession(null);

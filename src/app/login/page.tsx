@@ -1,4 +1,5 @@
 // app/login/page.tsx ✅ FINAL (ADMIN + EMPLEADO por SELECTOR + PIN)
+// ✅ FIX BUILD: useSearchParams() va dentro de <Suspense /> para que Next no falle en /login
 // - Admin: email + password
 // - Empleado: selecciona empleado (lista local por sessionStorage, recarga opcional) + PIN 4 dígitos
 // - Cero escrituras extra (solo las de AuthContext en login)
@@ -9,9 +10,9 @@
 
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthContext } from '@/context/AuthContext';
 
@@ -60,6 +61,7 @@ function readLiteCache(): EmpleadoLite[] | null {
     return null;
   }
 }
+
 function writeLiteCache(list: EmpleadoLite[]) {
   try {
     sessionStorage.setItem(EMP_LITE_CACHE_KEY, JSON.stringify(list));
@@ -67,8 +69,22 @@ function writeLiteCache(list: EmpleadoLite[]) {
   } catch {}
 }
 
-export default function LoginPage() {
+function LoginFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+      <div className="w-full max-w-md p-8 bg-gray-800/90 backdrop-blur-sm rounded-2xl border border-cyan-700/30 shadow-2xl text-center">
+        <div className="mx-auto mb-4 h-10 w-10 rounded-full border-2 border-white/40 border-t-white animate-spin" />
+        <p className="text-white font-semibold">Cargando login...</p>
+        <p className="text-gray-400 text-sm mt-1">Global Ice de Mexico SA. de CV.</p>
+      </div>
+    </div>
+  );
+}
+
+function LoginContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const {
     loginAdmin,
     loginProduction,
@@ -79,7 +95,8 @@ export default function LoginPage() {
     loadEmpleados, // ✅ usa cache+TTL (mínimas lecturas)
   } = useAuthContext();
 
-  const [mode, setMode] = useState<Mode>('admin');
+  const initialMode: Mode = searchParams.get('mode') === 'empleado' ? 'empleado' : 'admin';
+  const [mode, setMode] = useState<Mode>(initialMode);
 
   // Admin
   const [email, setEmail] = useState('');
@@ -133,6 +150,14 @@ export default function LoginPage() {
 
   const currentColors = colors[mode];
 
+  // ✅ Respeta /login?mode=empleado o /login?mode=admin
+  // Esto evita que al redirigir desde producción se pinte primero Admin
+  // y rebote al panel equivocado si existe una sesión admin guardada.
+  useEffect(() => {
+    const requestedMode: Mode = searchParams.get('mode') === 'empleado' ? 'empleado' : 'admin';
+    setMode((current) => (current === requestedMode ? current : requestedMode));
+  }, [searchParams]);
+
   // ✅ Redirect inteligente: respeta el modo actual (evita brincarse al admin)
   useEffect(() => {
     if (loading) return;
@@ -184,13 +209,13 @@ export default function LoginPage() {
 
       const full = await loadEmpleados(force); // trae activos (según tu AuthContext)
       const lite: EmpleadoLite[] = (full || [])
-        .filter((e) => !!e.codigo && !!e.nombre)
-        .map((e) => ({
+        .filter((e: any) => !!e.codigo && !!e.nombre)
+        .map((e: any) => ({
           codigo: normalizeCodigo(e.codigo || ''),
           nombre: String(e.nombre || '').trim(),
           role: e.role,
         }))
-        .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+        .sort((a: EmpleadoLite, b: EmpleadoLite) => a.nombre.localeCompare(b.nombre, 'es'));
 
       setEmpleadosLite(lite);
       writeLiteCache(lite);
@@ -308,7 +333,11 @@ export default function LoginPage() {
         {/* Switch */}
         <div className="flex bg-gray-700/50 rounded-xl p-1 mb-8 border border-gray-600">
           <button
-            onClick={() => setMode('admin')}
+            type="button"
+            onClick={() => {
+              setMode('admin');
+              router.replace('/login?mode=admin');
+            }}
             className={`flex-1 py-3 rounded-lg font-medium transition-all duration-300 flex items-center justify-center gap-2 ${
               mode === 'admin'
                 ? `bg-gradient-to-r ${colors.admin.primary} text-white shadow-lg ${colors.admin.shadow}`
@@ -321,7 +350,11 @@ export default function LoginPage() {
           </button>
 
           <button
-            onClick={() => setMode('empleado')}
+            type="button"
+            onClick={() => {
+              setMode('empleado');
+              router.replace('/login?mode=empleado');
+            }}
             className={`flex-1 py-3 rounded-lg font-medium transition-all duration-300 flex items-center justify-center gap-2 ${
               mode === 'empleado'
                 ? `bg-gradient-to-r ${colors.empleado.primary} text-white shadow-lg ${colors.empleado.shadow}`
@@ -669,5 +702,13 @@ export default function LoginPage() {
         )}
       </motion.div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginContent />
+    </Suspense>
   );
 }
