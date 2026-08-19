@@ -3,7 +3,7 @@
 // ✅ FIX PRO: Cantidades de SALIDAS (y entradas) correctas aunque no venga deltaPrincipal/cantidad
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import { useAuthContext } from '@/context/AuthContext';
@@ -195,17 +195,95 @@ function safeMeta(tipo: TipoMovimiento) {
   }
 }
 
+function isSalidaMovimiento(tipo: unknown): boolean {
+  const t = String(tipo ?? '').trim().toUpperCase();
+  return t === 'SALIDA' || t === 'SALIDA_BOLSA' || t === 'SALIDA_STOCK' || t.startsWith('SALIDA_');
+}
+
+function getBatchItems(m: any): any[] {
+  return Array.isArray(m?.items) ? m.items.filter(Boolean) : [];
+}
+
+function getBatchSignedQty(m: any): number | null {
+  const items = getBatchItems(m);
+  if (!items.length || !isSalidaMovimiento(m?.tipo)) return null;
+
+  // Primero respetamos delta por item si existe.
+  const deltaTotal = items.reduce((acc, it) => {
+    const d = toNumberSafe(it?.delta);
+    return acc + (d ?? 0);
+  }, 0);
+
+  if (deltaTotal !== 0) return deltaTotal;
+
+  // Si el batch viejo no trae delta por item, sumamos cantidades como salida.
+  const qtyTotal = items.reduce((acc, it) => {
+    const qty =
+      toNumberSafe(it?.cantidad) ??
+      toNumberSafe(it?.qty) ??
+      toNumberSafe(it?.cantidadBolsas) ??
+      0;
+    return acc + Math.abs(qty);
+  }, 0);
+
+  return qtyTotal > 0 ? -qtyTotal : 0;
+}
+
 function getSignedQty(m: any): number {
-  // 1) Si deltaPrincipal existe y ya trae signo, respétalo.
+  // 1) Las salidas batch guardan el detalle dentro de items[].
+  const batchSigned = getBatchSignedQty(m);
+  if (batchSigned !== null) return batchSigned;
+
+  // 2) Si deltaPrincipal existe y ya trae signo, respétalo.
   const dp = toNumberSafe(m.deltaPrincipal);
   if (dp !== null) return dp;
 
-  // 2) Si no, firmamos por meta (entrada/salida)
+  // 3) Si no, firmamos por meta (entrada/salida)
   const tipo = m.tipo as TipoMovimiento;
   const meta = safeMeta(tipo);
   const q = getMovimientoQty(m);
 
   return meta.esEntrada ? Math.abs(q) : -Math.abs(q);
+}
+
+function getMovimientoProductoDisplay(m: any): {
+  titulo: string;
+  codigo: string;
+  esBatch: boolean;
+  items: any[];
+} {
+  const items = getBatchItems(m);
+  const esBatch = isSalidaMovimiento(m?.tipo) && items.length > 0;
+
+  if (!esBatch) {
+    return {
+      titulo: String(m?.productoNombre ?? '—'),
+      codigo: String(m?.productoCodigo ?? '—'),
+      esBatch: false,
+      items: [],
+    };
+  }
+
+  const n = items.length;
+  return {
+    titulo: `Salida · ${n} producto${n === 1 ? '' : 's'}`,
+    codigo: String(m?.codigo ?? m?.id ?? 'batch'),
+    esBatch: true,
+    items,
+  };
+}
+
+function getItemSignedQty(it: any): number {
+  const delta = toNumberSafe(it?.delta);
+  if (delta !== null && delta !== 0) return delta;
+
+  const qty =
+    toNumberSafe(it?.cantidad) ??
+    toNumberSafe(it?.qty) ??
+    toNumberSafe(it?.cantidadBolsas) ??
+    0;
+
+  return -Math.abs(qty);
 }
 
 /* ============================================================
@@ -422,8 +500,6 @@ export default function ReportesPage() {
   const [showCharts, setShowCharts] = useState(true);
   const [selectedDateRange, setSelectedDateRange] = useState<'7dias' | '30dias' | 'custom'>('7dias');
 
-  const printRef = useRef<HTMLDivElement | null>(null);
-
   const [filters, setFilters] = useState<FiltersState>(() => {
     const q = sp.get('q') ?? '';
     const origin = ((sp.get('origin') as OriginFilter) || 'TODOS') as OriginFilter;
@@ -536,26 +612,42 @@ export default function ReportesPage() {
       string,
       { codigo: string; nombre: string; tipoProducto?: any; status?: any; kg?: number; count: number }
     >();
-    for (const m of rows as any[]) {
-      const codigo = String(m?.productoCodigo ?? '').trim();
-      if (!codigo) continue;
-      const kg = guessKgFromName(m?.productoNombre);
+
+    const addProducto = (p: any) => {
+      const codigo = String(p?.productoCodigo ?? p?.bolsaVaciaCodigo ?? '').trim();
+      if (!codigo) return;
+
+      const nombre = String(p?.productoNombre ?? codigo);
+      const kg = guessKgFromName(nombre);
       const prev = map.get(codigo);
+
       if (!prev) {
         map.set(codigo, {
           codigo,
-          nombre: m?.productoNombre ?? codigo,
-          tipoProducto: m?.tipoProducto,
-          status: m?.status,
+          nombre,
+          tipoProducto: p?.tipoProducto,
+          status: p?.status,
           kg,
           count: 1,
         });
       } else {
         prev.count += 1;
         if (!prev.kg && kg) prev.kg = kg;
-        if (!prev.status && m?.status) prev.status = m?.status;
+        if (!prev.status && p?.status) prev.status = p?.status;
+        if (!prev.tipoProducto && p?.tipoProducto) prev.tipoProducto = p?.tipoProducto;
+      }
+    };
+
+    for (const m of rows as any[]) {
+      const items = getBatchItems(m);
+
+      if (isSalidaMovimiento(m?.tipo) && items.length) {
+        for (const it of items) addProducto(it);
+      } else {
+        addProducto(m);
       }
     }
+
     return Array.from(map.values()).sort((a, b) => (a.nombre ?? '').localeCompare(b.nombre ?? ''));
   }, [rows]);
 
@@ -579,16 +671,27 @@ export default function ReportesPage() {
       const fecha = toDateSafe(m.fecha);
       if (!inRange(fecha)) return false;
 
-      const productoCodigo = String(m.productoCodigo ?? '').trim();
-      if (filters.productoCodigo && productoCodigo !== filters.productoCodigo) return false;
+      const items = getBatchItems(m);
+
+      if (filters.productoCodigo) {
+        const rootCodigo = String(m.productoCodigo ?? '').trim();
+        const itemMatch = items.some((it) => {
+          const codigo = String(it?.productoCodigo ?? it?.bolsaVaciaCodigo ?? '').trim();
+          return codigo === filters.productoCodigo;
+        });
+
+        if (rootCodigo !== filters.productoCodigo && !itemMatch) return false;
+      }
 
       if (filters.tipos.length && !filters.tipos.includes(m.tipo)) return false;
       if (filters.turnos.length && !filters.turnos.includes(m.turno)) return false;
 
       if (filters.hielos.length) {
-        const h = m.tipoHielo;
-        if (!isIceType(h)) return false;
-        if (!filters.hielos.includes(h)) return false;
+        const rootHielo = m.tipoHielo;
+        const rootMatch = isIceType(rootHielo) && filters.hielos.includes(rootHielo);
+        const itemMatch = items.some((it) => isIceType(it?.tipoHielo) && filters.hielos.includes(it.tipoHielo));
+
+        if (!rootMatch && !itemMatch) return false;
       }
 
       if (filters.origin !== 'TODOS') {
@@ -602,6 +705,17 @@ export default function ReportesPage() {
 
       const tipo = m.tipo as TipoMovimiento;
       const meta = safeMeta(tipo);
+
+      const itemsText = getBatchItems(m)
+        .flatMap((it) => [
+          it?.productoNombre,
+          it?.productoCodigo,
+          it?.bolsaVaciaCodigo,
+          it?.tipoHielo,
+          it?.cantidad,
+          it?.delta,
+        ])
+        .join(' ');
 
       return [
         m.codigo,
@@ -622,6 +736,7 @@ export default function ReportesPage() {
         m.observaciones ?? '',
         m.maquina ?? '',
         m.ubicacion ?? '',
+        itemsText,
       ]
         .join(' ')
         .toLowerCase()
@@ -700,11 +815,24 @@ export default function ReportesPage() {
 
   const byHielo = useMemo(() => {
     const map: Record<string, number> = {};
+
     for (const m of filtered as any[]) {
+      const items = getBatchItems(m);
+
+      if (isSalidaMovimiento(m?.tipo) && items.length) {
+        for (const it of items) {
+          const h = it?.tipoHielo;
+          if (!isIceType(h)) continue;
+          map[h] = (map[h] ?? 0) + 1;
+        }
+        continue;
+      }
+
       const h = m.tipoHielo;
       if (!isIceType(h)) continue;
       map[h] = (map[h] ?? 0) + 1;
     }
+
     return Object.entries(map)
       .map(([h, count]) => ({ hielo: h as IceType, label: labelHielo(h), value: count }))
       .sort((a, b) => b.value - a.value);
@@ -1161,6 +1289,7 @@ export default function ReportesPage() {
                       const signed = getSignedQty(m);
                       const qtyAbs = Math.abs(signed);
                       const qtyPrint = `${signed < 0 ? '−' : '+'}${qtyAbs}`;
+                      const productoDisplay = getMovimientoProductoDisplay(m);
 
                       const userLabel = `${m.usuarioNombre ?? ''}`.trim() || m.usuarioCodigo || '—';
                       const notas =
@@ -1174,10 +1303,36 @@ export default function ReportesPage() {
                         <tr key={m.id ?? m.codigo ?? `${m.tipo}-${m.fecha}`}>
                           <td>{fmtDate(fecha)}</td>
                           <td>{meta.texto}</td>
-                          <td>{m.productoNombre ?? '—'}</td>
-                          <td>{m.productoCodigo ?? '—'}</td>
+                          <td>
+                            {productoDisplay.esBatch ? (
+                              <div>
+                                <div>{productoDisplay.titulo}</div>
+                                {productoDisplay.items.slice(0, 8).map((it: any, idx: number) => (
+                                  <div key={idx} className="pdf-small pdf-muted">
+                                    {it?.productoNombre ?? 'Producto'} · {it?.tipoHielo ? labelHielo(it.tipoHielo) : '—'} ·{' '}
+                                    {getItemSignedQty(it)}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              productoDisplay.titulo
+                            )}
+                          </td>
+                          <td>{productoDisplay.esBatch ? 'BATCH' : productoDisplay.codigo}</td>
                           <td>{qtyPrint}</td>
-                          <td>{m.tipoHielo && isIceType(m.tipoHielo) ? labelHielo(m.tipoHielo) : '—'}</td>
+                          <td>
+                            {productoDisplay.esBatch
+                              ? Array.from(
+                                  new Set(
+                                    productoDisplay.items
+                                      .map((it: any) => (isIceType(it?.tipoHielo) ? labelHielo(it.tipoHielo) : null))
+                                      .filter(Boolean),
+                                  ),
+                                ).join(', ') || '—'
+                              : m.tipoHielo && isIceType(m.tipoHielo)
+                              ? labelHielo(m.tipoHielo)
+                              : '—'}
+                          </td>
                           <td>{m.turno ?? '—'}</td>
                           <td>{userLabel}</td>
                           <td>{notas || '—'}</td>
@@ -1745,6 +1900,8 @@ export default function ReportesPage() {
                     const signed = getSignedQty(m);
                     const cantidadAbs = Math.abs(signed);
                     const isSalida = signed < 0;
+                    const productoDisplay = getMovimientoProductoDisplay(m);
+                    const batchItems = productoDisplay.items;
 
                     const desc =
                       (m.observaciones && String(m.observaciones).trim()) ||
@@ -1793,10 +1950,48 @@ export default function ReportesPage() {
                         </td>
 
                         <td className="px-6 py-5">
-                          <div className="flex flex-col">
-                            <span className="font-medium text-white">{m.productoNombre ?? '—'}</span>
-                            <span className="text-xs text-gray-400">{m.productoCodigo ?? '—'}</span>
-                          </div>
+                          {productoDisplay.esBatch ? (
+                            <div className="min-w-[300px]">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-white">{productoDisplay.titulo}</span>
+                                <span className="rounded-full border border-blue-700/30 bg-blue-950/30 px-2 py-0.5 text-[10px] font-bold text-blue-300">
+                                  BATCH
+                                </span>
+                              </div>
+
+                              <div className="mt-2 space-y-1.5">
+                                {batchItems.map((it: any, idx: number) => {
+                                  const itemSigned = getItemSignedQty(it);
+                                  const itemCodigo = String(it?.productoCodigo ?? it?.bolsaVaciaCodigo ?? '—');
+
+                                  return (
+                                    <div
+                                      key={`${itemCodigo}-${it?.tipoHielo ?? 'sin-tipo'}-${idx}`}
+                                      className="flex items-center justify-between gap-3 rounded-lg border border-gray-800/60 bg-gray-950/30 px-2.5 py-1.5"
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="truncate text-xs font-medium text-gray-200">
+                                          {it?.productoNombre ?? 'Producto'}
+                                        </div>
+                                        <div className="text-[10px] text-gray-500">
+                                          {itemCodigo}
+                                          {it?.tipoHielo ? ` · ${labelHielo(it.tipoHielo)}` : ''}
+                                        </div>
+                                      </div>
+                                      <div className="shrink-0 text-xs font-bold text-rose-400">
+                                        −{Math.abs(itemSigned).toLocaleString('es-MX')}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col">
+                              <span className="font-medium text-white">{productoDisplay.titulo}</span>
+                              <span className="text-xs text-gray-400">{productoDisplay.codigo}</span>
+                            </div>
+                          )}
                         </td>
 
                         <td className="px-6 py-5">
@@ -1804,12 +1999,29 @@ export default function ReportesPage() {
                             {(isSalida ? '−' : '+') + cantidadAbs.toLocaleString('es-MX')}
                           </div>
                           <div className="text-xs text-gray-500 mt-1">
-                            raw: {String(m.deltaPrincipal ?? m.cantidad ?? m.qty ?? '—')}
+                            {productoDisplay.esBatch
+                              ? `${batchItems.length} item${batchItems.length === 1 ? '' : 's'}`
+                              : `raw: ${String(m.deltaPrincipal ?? m.cantidad ?? m.qty ?? '—')}`}
                           </div>
                         </td>
 
                         <td className="px-6 py-5">
-                          {m.tipoHielo && isIceType(m.tipoHielo) ? (
+                          {productoDisplay.esBatch ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {Array.from(
+                                new Set(
+                                  batchItems
+                                    .map((it: any) => (isIceType(it?.tipoHielo) ? it.tipoHielo : null))
+                                    .filter(Boolean),
+                                ),
+                              ).map((h) => (
+                                <IceTypeBadge key={String(h)} tipo={h as IceType} size="sm" />
+                              ))}
+                              {!batchItems.some((it: any) => isIceType(it?.tipoHielo)) && (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </div>
+                          ) : m.tipoHielo && isIceType(m.tipoHielo) ? (
                             <IceTypeBadge tipo={m.tipoHielo} size="sm" />
                           ) : (
                             <span className="text-gray-400">—</span>

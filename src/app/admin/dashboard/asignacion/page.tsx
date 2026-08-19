@@ -16,6 +16,9 @@ import { useRouter } from 'next/navigation';
 import { useAuthContext } from '@/context/AuthContext';
 import { useProducts, type TurnoType, type Asignacion, type EmpleadoSimple } from '@/lib/hooks/useProducts';
 
+import { db } from '@/lib/firebase/config.client';
+import { deleteDoc, doc, writeBatch } from 'firebase/firestore';
+
 import {
   ArrowLeft,
   RefreshCw,
@@ -30,7 +33,6 @@ import {
   X,
   CheckCircle2,
   ShieldAlert,
-  Sparkles,
   ChevronDown,
   ChevronUp,
   Pencil,
@@ -44,9 +46,11 @@ import {
   FileText,
   Timer,
   TrendingUp,
+  Database,
 } from 'lucide-react';
 
 type ModoCosecha = 'NUEVA' | 'EXISTENTE';
+type FiltroEstado = 'TODOS' | 'PENDIENTE' | 'COMPLETADA' | 'CANCELADA';
 
 const ETIQUETA_TURNO: Record<TurnoType, string> = {
   MATUTINO: 'Matutino',
@@ -262,7 +266,11 @@ export default function AdminAsignacionPage() {
   const [openHistorial, setOpenHistorial] = useState(true);
   const [filtroTexto, setFiltroTexto] = useState('');
   const [filtroTurno, setFiltroTurno] = useState<TurnoType | 'TODOS'>('TODOS');
-  const [soloPendientes, setSoloPendientes] = useState(false);
+  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('TODOS');
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Asignacion | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   // -----------------------------
   // Edit / Cancel modals
@@ -299,7 +307,10 @@ export default function AdminAsignacionPage() {
   const closeAllModals = useCallback(() => {
     setEditOpen(false);
     setCancelOpen(false);
+    setDeleteOpen(false);
+    setBulkDeleteOpen(false);
     setTarget(null);
+    setDeleteTarget(null);
   }, []);
 
   // -----------------------------
@@ -345,9 +356,9 @@ export default function AdminAsignacionPage() {
     const q = filtroTexto.trim().toLowerCase();
 
     return asignaciones.filter((a) => {
-      const estado = String(a.estado ?? 'PENDIENTE');
+      const estado = String(a.estado ?? 'PENDIENTE').toUpperCase();
 
-      if (soloPendientes && estado !== 'PENDIENTE') return false;
+      if (filtroEstado !== 'TODOS' && estado !== filtroEstado) return false;
       if (filtroTurno !== 'TODOS' && String(a.turno ?? '') !== String(filtroTurno)) return false;
 
       if (!q) return true;
@@ -358,10 +369,20 @@ export default function AdminAsignacionPage() {
         String(a.empleadoNombre ?? '').toLowerCase().includes(q) ||
         String(a.empleadoCodigo ?? '').toLowerCase().includes(q) ||
         String(a.cosechaCodigo ?? '').toLowerCase().includes(q) ||
-        String(a.codigo ?? '').toLowerCase().includes(q)
+        String(a.codigo ?? '').toLowerCase().includes(q) ||
+        estado.toLowerCase().includes(q)
       );
     });
-  }, [asignaciones, filtroTexto, filtroTurno, soloPendientes]);
+  }, [asignaciones, filtroTexto, filtroTurno, filtroEstado]);
+
+  const asignacionesEliminablesFiltradas = useMemo(
+    () =>
+      asignacionesFiltradas.filter((a) => {
+        const estado = String(a.estado ?? 'PENDIENTE').toUpperCase();
+        return estado === 'COMPLETADA' || estado === 'CANCELADA';
+      }),
+    [asignacionesFiltradas]
+  );
 
   // -----------------------------
   // Historial agrupado por cosecha
@@ -518,6 +539,74 @@ export default function AdminAsignacionPage() {
     }
   }, [target?.id, actor, cancelMotivo, cancelForce, adminCancelarAsignacion, closeAllModals]);
 
+
+  const openDelete = useCallback((a: Asignacion) => {
+    const estado = String(a.estado ?? 'PENDIENTE').toUpperCase();
+    if (estado !== 'COMPLETADA' && estado !== 'CANCELADA') {
+      setToast({
+        type: 'err',
+        msg: '❌ Por seguridad, una asignación pendiente no se borra. Primero debes cancelarla.',
+      });
+      return;
+    }
+    setDeleteTarget(a);
+    setDeleteOpen(true);
+  }, []);
+
+  const onEliminarDefinitivo = useCallback(async () => {
+    setToast(null);
+    try {
+      if (!deleteTarget?.id) throw new Error('Asignación inválida (sin id)');
+
+      const estado = String(deleteTarget.estado ?? 'PENDIENTE').toUpperCase();
+      if (estado !== 'COMPLETADA' && estado !== 'CANCELADA') {
+        throw new Error('Solo se pueden eliminar definitivamente asignaciones COMPLETADAS o CANCELADAS.');
+      }
+
+      setSubmitting(true);
+      await deleteDoc(doc(db, 'asignaciones', deleteTarget.id));
+
+      const codigo = deleteTarget.codigo || deleteTarget.id;
+      closeAllModals();
+      setToast({ type: 'ok', msg: `✅ Asignación ${codigo} eliminada definitivamente de Firestore.` });
+    } catch (e: any) {
+      setToast({ type: 'err', msg: `❌ ${e?.message ?? 'Error eliminando asignación de Firestore'}` });
+    } finally {
+      setSubmitting(false);
+    }
+  }, [deleteTarget, closeAllModals]);
+
+  const onEliminarFiltradas = useCallback(async () => {
+    setToast(null);
+    try {
+      const eliminables = asignacionesEliminablesFiltradas;
+      if (!eliminables.length) {
+        throw new Error('No hay asignaciones COMPLETADAS o CANCELADAS visibles para eliminar.');
+      }
+
+      setSubmitting(true);
+
+      const chunkSize = 450;
+      for (let i = 0; i < eliminables.length; i += chunkSize) {
+        const chunk = eliminables.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        for (const a of chunk) batch.delete(doc(db, 'asignaciones', a.id));
+        await batch.commit();
+      }
+
+      const total = eliminables.length;
+      closeAllModals();
+      setToast({
+        type: 'ok',
+        msg: `✅ ${total} asignación${total === 1 ? '' : 'es'} eliminada${total === 1 ? '' : 's'} definitivamente de Firestore.`,
+      });
+    } catch (e: any) {
+      setToast({ type: 'err', msg: `❌ ${e?.message ?? 'Error eliminando asignaciones filtradas'}` });
+    } finally {
+      setSubmitting(false);
+    }
+  }, [asignacionesEliminablesFiltradas, closeAllModals]);
+
   // -----------------------------
   // UI helpers
   // -----------------------------
@@ -656,10 +745,10 @@ export default function AdminAsignacionPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3 mb-8">
-        <StatCard title="Total Asignaciones" value={stats.totalAsignaciones} icon={ClipboardList} color="from-blue-900/40 to-blue-800/30" />
-        <StatCard title="Pendientes" value={stats.asignacionesPendientes} icon={Timer} color="from-amber-900/40 to-amber-800/30" />
-        <StatCard title="Completadas" value={stats.asignacionesCompletadas} icon={CheckCircle2} color="from-emerald-900/40 to-emerald-800/30" />
-        <StatCard title="Canceladas" value={stats.asignacionesCanceladas} icon={Ban} color="from-rose-900/40 to-rose-800/30" />
+        <StatCard title="Total Asignaciones" value={stats.totalAsignaciones} icon={ClipboardList} color="from-blue-900/40 to-blue-800/30" onClick={() => setFiltroEstado('TODOS')} />
+        <StatCard title="Pendientes" value={stats.asignacionesPendientes} icon={Timer} color="from-amber-900/40 to-amber-800/30" onClick={() => setFiltroEstado('PENDIENTE')} />
+        <StatCard title="Completadas" value={stats.asignacionesCompletadas} icon={CheckCircle2} color="from-emerald-900/40 to-emerald-800/30" onClick={() => setFiltroEstado('COMPLETADA')} />
+        <StatCard title="Canceladas" value={stats.asignacionesCanceladas} icon={Ban} color="from-rose-900/40 to-rose-800/30" onClick={() => setFiltroEstado('CANCELADA')} />
         <StatCard title="Bolsas Vacías" value={stats.totalBolsasVacias} icon={Package} color="from-cyan-900/40 to-cyan-800/30" />
         <StatCard title="Empleados" value={stats.totalEmpleados} icon={Users} color="from-purple-900/40 to-purple-800/30" />
         <StatCard title="Cosechas Abiertas" value={stats.cosechasAbiertas} icon={TrendingUp} color="from-orange-900/40 to-orange-800/30" />
@@ -966,13 +1055,24 @@ export default function AdminAsignacionPage() {
                 />
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Filter className="h-4 w-4 text-gray-500" />
                   <select
                     className="px-3 py-3 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 backdrop-blur-sm"
+                    value={filtroEstado}
+                    onChange={(e) => setFiltroEstado(e.target.value as FiltroEstado)}
+                  >
+                    <option value="TODOS">Todos los estados</option>
+                    <option value="PENDIENTE">Pendientes</option>
+                    <option value="COMPLETADA">Completadas</option>
+                    <option value="CANCELADA">Canceladas</option>
+                  </select>
+
+                  <select
+                    className="px-3 py-3 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 backdrop-blur-sm"
                     value={filtroTurno}
-                    onChange={(e) => setFiltroTurno(e.target.value as any)}
+                    onChange={(e) => setFiltroTurno(e.target.value as TurnoType | 'TODOS')}
                   >
                     <option value="TODOS">Todos los turnos</option>
                     <option value="MATUTINO">Matutino</option>
@@ -981,15 +1081,17 @@ export default function AdminAsignacionPage() {
                   </select>
                 </div>
 
-                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={soloPendientes}
-                    onChange={(e) => setSoloPendientes(e.target.checked)}
-                    className="rounded border-gray-600 bg-gray-800 text-purple-500 focus:ring-purple-500/50"
-                  />
-                  Solo pendientes
-                </label>
+                {asignacionesEliminablesFiltradas.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteOpen(true)}
+                    disabled={submitting}
+                    className="inline-flex items-center gap-2 px-4 py-3 rounded-xl border border-rose-700/40 bg-rose-950/30 text-rose-300 hover:bg-rose-900/40 transition-all"
+                  >
+                    <Database className="h-4 w-4" />
+                    Eliminar visibles ({asignacionesEliminablesFiltradas.length})
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1003,7 +1105,7 @@ export default function AdminAsignacionPage() {
                   <History className="h-24 w-24 text-gray-700 mx-auto mb-4 opacity-50" />
                   <h3 className="text-xl font-bold text-gray-300 mb-2">No hay asignaciones</h3>
                   <p className="text-gray-500">
-                    {filtroTexto || filtroTurno !== 'TODOS' || soloPendientes
+                    {filtroTexto || filtroTurno !== 'TODOS' || filtroEstado !== 'TODOS'
                       ? 'No hay asignaciones que coincidan con los filtros'
                       : 'Crea tu primera asignación usando el formulario superior'}
                   </p>
@@ -1109,23 +1211,37 @@ export default function AdminAsignacionPage() {
                               </div>
 
                               <div className="flex gap-2">
-                                <button
-                                  onClick={() => openEdit(a)}
-                                  disabled={submitting}
-                                  className="p-2.5 text-blue-400 hover:text-blue-300 hover:bg-blue-900/40 rounded-xl transition-all duration-300 hover:scale-110"
-                                  title="Editar asignación"
-                                >
-                                  <Pencil className="h-5 w-5" />
-                                </button>
+                                {!isCancel && !isDone ? (
+                                  <>
+                                    <button
+                                      onClick={() => openEdit(a)}
+                                      disabled={submitting}
+                                      className="p-2.5 text-blue-400 hover:text-blue-300 hover:bg-blue-900/40 rounded-xl transition-all duration-300 hover:scale-110"
+                                      title="Editar asignación pendiente"
+                                    >
+                                      <Pencil className="h-5 w-5" />
+                                    </button>
 
-                                <button
-                                  onClick={() => openCancel(a)}
-                                  disabled={submitting}
-                                  className="p-2.5 text-rose-400 hover:text-rose-300 hover:bg-rose-900/40 rounded-xl transition-all duration-300 hover:scale-110"
-                                  title="Cancelar asignación"
-                                >
-                                  <Trash2 className="h-5 w-5" />
-                                </button>
+                                    <button
+                                      onClick={() => openCancel(a)}
+                                      disabled={submitting}
+                                      className="p-2.5 text-amber-400 hover:text-amber-300 hover:bg-amber-900/40 rounded-xl transition-all duration-300 hover:scale-110"
+                                      title="Cancelar asignación pendiente"
+                                    >
+                                      <Ban className="h-5 w-5" />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => openDelete(a)}
+                                    disabled={submitting}
+                                    className="inline-flex items-center gap-2 px-3 py-2.5 text-rose-400 hover:text-rose-300 hover:bg-rose-900/40 rounded-xl transition-all duration-300"
+                                    title="Eliminar definitivamente de Firestore"
+                                  >
+                                    <Trash2 className="h-5 w-5" />
+                                    <span className="text-xs font-semibold">Eliminar</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1271,7 +1387,8 @@ export default function AdminAsignacionPage() {
               <div className="flex items-start gap-3">
                 <AlertTriangle className="h-5 w-5 text-rose-400 mt-0.5" />
                 <div className="text-sm text-rose-300">
-                  Esto NO borra el documento: lo marca como <span className="font-bold">CANCELADA</span> para auditoría.
+                  Esta acción <b>cancela</b> la asignación y la conserva para auditoría. Después podrás filtrarla como
+                  <span className="font-bold"> CANCELADA</span> y eliminarla definitivamente si ya no la necesitas.
                 </div>
               </div>
             </div>
@@ -1334,6 +1451,72 @@ export default function AdminAsignacionPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal open={deleteOpen} title="Eliminar Asignación Definitivamente" onClose={closeAllModals}>
+        {deleteTarget && (
+          <div className="space-y-6">
+            <div className="rounded-xl border border-rose-700/40 bg-rose-950/30 p-4">
+              <div className="flex items-start gap-3">
+                <Database className="h-6 w-6 text-rose-300 mt-0.5" />
+                <div>
+                  <div className="font-bold text-white">
+                    {deleteTarget.productoCodigo} — {deleteTarget.productoNombre}
+                  </div>
+                  <div className="mt-1 text-sm text-rose-200">
+                    Estado: <b>{String(deleteTarget.estado ?? '—')}</b>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-400 font-mono">
+                    Firestore /asignaciones/{deleteTarget.id}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-700/30 bg-amber-950/20 p-4 text-sm text-amber-200">
+              Este borrado es permanente. Sólo se permite para registros COMPLETADOS o CANCELADOS.
+              Las asignaciones pendientes deben cancelarse primero para proteger el stock.
+            </div>
+
+            <div className="flex gap-3 pt-4 border-t border-gray-800/50">
+              <button onClick={closeAllModals} disabled={submitting} className="flex-1 px-4 py-3 text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium">
+                Conservar
+              </button>
+              <button onClick={onEliminarDefinitivo} disabled={submitting} className="flex-1 px-4 py-3 bg-gradient-to-r from-rose-700 to-rose-800 text-white rounded-xl font-medium flex items-center justify-center">
+                {submitting ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Eliminando...</> : <><Trash2 className="h-5 w-5 mr-2" />Eliminar de Firestore</>}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={bulkDeleteOpen} title="Limpiar Historial Filtrado" onClose={closeAllModals}>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-rose-700/40 bg-rose-950/30 p-4">
+            <div className="font-bold text-white">Borrado permanente</div>
+            <div className="mt-1 text-sm text-rose-200">
+              Se eliminarán <b>{asignacionesEliminablesFiltradas.length}</b> asignaciones visibles que estén COMPLETADAS o CANCELADAS.
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-lg bg-gray-900/60 p-3">Estado: <b className="text-white">{filtroEstado}</b></div>
+            <div className="rounded-lg bg-gray-900/60 p-3">Turno: <b className="text-white">{filtroTurno}</b></div>
+          </div>
+
+          <div className="rounded-xl border border-amber-700/30 bg-amber-950/20 p-4 text-sm text-amber-200">
+            Las asignaciones PENDIENTES nunca se eliminan con esta limpieza.
+          </div>
+
+          <div className="flex gap-3 pt-4 border-t border-gray-800/50">
+            <button onClick={closeAllModals} disabled={submitting} className="flex-1 px-4 py-3 text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-xl font-medium">
+              Cancelar
+            </button>
+            <button onClick={onEliminarFiltradas} disabled={submitting || asignacionesEliminablesFiltradas.length === 0} className="flex-1 px-4 py-3 bg-gradient-to-r from-rose-700 to-rose-800 text-white rounded-xl font-medium flex items-center justify-center">
+              {submitting ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Eliminando...</> : <><Database className="h-5 w-5 mr-2" />Eliminar visibles</>}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

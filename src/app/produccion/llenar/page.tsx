@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 // app/produccion/dashboard/page.tsx
@@ -48,6 +49,7 @@ import {
   FolderTree,
   List,
   ChevronDown,
+  Snowflake,
 } from "lucide-react";
 
 type BarraUI = {
@@ -109,6 +111,18 @@ const normCode = (v: any) =>
     .trim()
     .toUpperCase();
 
+function esBolsaMaquila(bv: BolsaProduct | any): boolean {
+  const nombre = String(bv?.nombre ?? "").trim().toLowerCase();
+  const categoria = String(bv?.categoria ?? "").trim().toLowerCase();
+  const tipo = String(bv?.tipo ?? "").trim().toLowerCase();
+
+  return (
+    nombre.includes("maquila") ||
+    categoria.includes("maquila") ||
+    tipo.includes("maquila")
+  );
+}
+
 function getTiposConfigurados(bv: BolsaProduct | any): IceType[] {
   const a = bv?.configuracionAdmin?.tiposHieloConfigurados;
   if (Array.isArray(a) && a.length) return a as IceType[];
@@ -140,34 +154,34 @@ function Modal({
   return (
     <div className="fixed inset-0 z-50 animate-in fade-in duration-200">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
         onClick={onClose}
         aria-hidden="true"
       />
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div
-          className={`w-full ${maxW} bg-white rounded-3xl shadow-2xl border border-gray-200 animate-in slide-in-from-bottom-4 duration-300`}
+          className={`w-full ${maxW} bg-slate-900 rounded-3xl shadow-2xl border border-slate-700/80 overflow-hidden animate-in slide-in-from-bottom-4 duration-300`}
         >
-          <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="flex items-center justify-between p-6 border-b border-slate-700/80 bg-gradient-to-r from-slate-900 via-cyan-900/30 to-slate-900">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-xl">
+              <div className="p-2.5 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl shadow-lg shadow-cyan-500/30">
                 <Package className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h3 className="font-bold text-gray-900 text-lg">{title}</h3>
-                <p className="text-sm text-gray-500 mt-0.5">Producción</p>
+                <h3 className="font-bold text-white text-lg tracking-tight">{title}</h3>
+                <p className="text-sm text-slate-400 mt-0.5">Producción</p>
               </div>
             </div>
 
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-gray-50 transition-all duration-200"
+              className="p-2 rounded-xl hover:bg-slate-800 transition-all duration-200 text-slate-400 hover:text-white"
               aria-label="Cerrar"
               type="button"
             >
               <div className="relative w-5 h-5 flex items-center justify-center">
-                <div className="w-5 h-0.5 bg-gray-500 rotate-45 absolute" />
-                <div className="w-5 h-0.5 bg-gray-500 -rotate-45 absolute" />
+                <div className="w-5 h-0.5 bg-slate-400 rotate-45 absolute" />
+                <div className="w-5 h-0.5 bg-slate-400 -rotate-45 absolute" />
               </div>
             </button>
           </div>
@@ -365,6 +379,12 @@ export default function ProductionFillPage() {
     );
   }, [bolsasVacias, selectedAsig]);
 
+  // ✅ Sólo visual: identifica si la bolsa asignada es de MAQUILA.
+  const selectedEsMaquila = useMemo(
+    () => (selectedBV ? esBolsaMaquila(selectedBV) : false),
+    [selectedBV],
+  );
+
   const tiposPermitidos = useMemo<IceType[]>(() => {
     if (!selectedBV) return [...TIPOS_HIELO];
     return getTiposConfigurados(selectedBV as BolsaProduct);
@@ -449,9 +469,10 @@ export default function ProductionFillPage() {
           totalProducto,
           asignadoPendiente: safeInt(selectedAsig.cantidad, 0),
           hasRealStock: !!selectedStock,
+          esMaquila: selectedEsMaquila,
         };
       });
-  }, [selectedAsig, selectedBV, selectedStock, tiposPermitidos]);
+  }, [selectedAsig, selectedBV, selectedStock, tiposPermitidos, selectedEsMaquila]);
 
   const [openFill, setOpenFill] = useState(false);
   const [fillTipo, setFillTipo] = useState<IceType>("ROLITO");
@@ -513,11 +534,6 @@ export default function ProductionFillPage() {
         `No puedes llenar más de lo asignado. Asignado: ${maxAsig}`,
       );
 
-    // ✅ IMPORTANTE:
-    // Aquí YA NO validamos contra bolsas vacías físicas de almacén.
-    // Admin ya descontó almacén al crear la asignación.
-    // Producción solo debe validar contra selectedAsig.cantidad.
-
     if (fillTipo === "BARRA") {
       if (!fillBarraCodigo) return setErrMsg("Selecciona la barra origen.");
       const br = barrasDisponibles.find((b) => b.codigo === fillBarraCodigo);
@@ -555,7 +571,9 @@ export default function ProductionFillPage() {
       });
 
       setOkMsg(
-        `Listo: +${cantidad} en ${ETIQUETAS_TIPO_HIELO[fillTipo]} (Máquina ${fillMaquina})`,
+        `Listo: +${cantidad} en ${ETIQUETAS_TIPO_HIELO[fillTipo]}${
+          selectedEsMaquila ? " · MAQUILA" : ""
+        } (Máquina ${fillMaquina})`,
       );
       setOpenFill(false);
     } catch (e: any) {
@@ -568,33 +586,33 @@ export default function ProductionFillPage() {
   if (loading || !productionSession) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-cyan-50 to-blue-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950/30">
       <div className="container mx-auto px-4 py-8">
-        <div className="bg-gradient-to-r from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 mb-8">
+        {/* Header */}
+        <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-6 mb-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => router.back()}
-                className="p-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:from-cyan-600 hover:to-blue-600 shadow-lg transition-all"
+                className="p-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-600 hover:to-blue-700 shadow-lg shadow-cyan-500/20 transition-all duration-300 hover:-translate-y-0.5"
                 type="button"
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
 
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-2xl shadow-lg">
-                  <Factory className="w-6 h-6 text-white" />
+                <div className="p-3 bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-2xl border border-cyan-500/30 shadow-lg">
+                  <Factory className="w-6 h-6 text-cyan-300" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <Droplets className="h-5 w-5 text-cyan-600" />
-                    <h1 className="text-2xl font-bold text-gray-900">
+                    <Snowflake className="h-5 w-5 text-cyan-300" />
+                    <h1 className="text-2xl font-bold text-white tracking-tight">
                       Llenado de Producción
                     </h1>
                   </div>
-                  <p className="text-gray-600 mt-1">
-                    Asignaciones{" "}
-                    <ChevronRight className="w-4 h-4 inline mx-1" /> Stock lleno
+                  <p className="text-slate-400 mt-1">
+                    Asignaciones <ChevronRight className="w-4 h-4 inline mx-1 text-slate-500" /> Stock 
                   </p>
                 </div>
               </div>
@@ -602,31 +620,32 @@ export default function ProductionFillPage() {
 
             <div className="flex items-center gap-4">
               <div className="text-right">
-                <p className="text-sm text-gray-600">Operario</p>
-                <p className="text-lg font-bold text-cyan-700">
+                <p className="text-sm text-slate-400">Operario</p>
+                <p className="text-lg font-bold text-cyan-300">
                   {productionSession.nombre}
                 </p>
-                <p className="text-xs text-gray-500 font-mono">
+                <p className="text-xs text-slate-500 font-mono">
                   {productionSession.codigo}
                 </p>
               </div>
-              <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg">
-                <Package className="w-5 h-5 text-white" />
+              <div className="w-12 h-12 bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-2xl flex items-center justify-center border border-cyan-500/30 shadow-lg">
+                <Package className="w-5 h-5 text-cyan-300" />
               </div>
             </div>
           </div>
         </div>
 
+        {/* Messages */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
           {(loadingAsig || loadingStock) && (
-            <div className="col-span-full bg-white rounded-2xl border border-cyan-200 p-6 shadow-lg">
+            <div className="col-span-full bg-slate-900/70 backdrop-blur-md rounded-2xl border border-slate-700/50 p-6 shadow-xl">
               <div className="flex items-center justify-center gap-4">
-                <div className="w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                <div className="w-10 h-10 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin" />
                 <div>
-                  <p className="font-medium text-gray-900">
+                  <p className="font-medium text-white">
                     Cargando datos del sistema...
                   </p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-slate-400">
                     Sincronizando información en tiempo real
                   </p>
                 </div>
@@ -635,14 +654,14 @@ export default function ProductionFillPage() {
           )}
 
           {(asigError || stockError) && (
-            <div className="col-span-full bg-gradient-to-r from-white to-rose-50 rounded-2xl border border-rose-200 p-6 shadow-lg">
+            <div className="col-span-full bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-gradient-to-r from-rose-500 to-rose-600 rounded-xl">
+                <div className="p-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl shadow-lg">
                   <AlertTriangle className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <p className="font-bold text-rose-800">Error del Sistema</p>
-                  <p className="text-rose-600 mt-1">
+                  <p className="font-bold text-amber-400">Error del Sistema</p>
+                  <p className="text-amber-300/80 mt-1">
                     {asigError || stockError}
                   </p>
                 </div>
@@ -651,33 +670,33 @@ export default function ProductionFillPage() {
           )}
 
           {okMsg && (
-            <div className="col-span-full bg-gradient-to-r from-emerald-50 to-cyan-50 rounded-2xl border border-emerald-200 p-6 shadow-lg">
+            <div className="col-span-full bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl">
+                <div className="p-3 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl shadow-lg">
                   <CheckCircle2 className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <p className="font-bold text-emerald-800">
+                  <p className="font-bold text-emerald-400">
                     Operación Exitosa
                   </p>
-                  <p className="text-emerald-700 mt-1">{okMsg}</p>
+                  <p className="text-emerald-300/80 mt-1">{okMsg}</p>
                 </div>
               </div>
             </div>
           )}
 
           {errMsg && (
-            <div className="col-span-full bg-gradient-to-r from-rose-50 to-purple-50 rounded-2xl border border-rose-200 p-6 shadow-lg">
+            <div className="col-span-full bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-gradient-to-r from-rose-500 to-purple-600 rounded-xl">
+                <div className="p-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl shadow-lg">
                   <AlertTriangle className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <p className="font-bold text-rose-800">
+                  <p className="font-bold text-amber-400">
                     Validación Requerida
                   </p>
-                  <p className="text-rose-700 mt-1">{errMsg}</p>
-                  <p className="text-sm text-rose-600 mt-2">
+                  <p className="text-amber-300/80 mt-1">{errMsg}</p>
+                  <p className="text-sm text-amber-400/60 mt-2">
                     Revisa los datos y vuelve a intentar
                   </p>
                 </div>
@@ -686,24 +705,26 @@ export default function ProductionFillPage() {
           )}
         </div>
 
+        {/* Main Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+          {/* Left Panel - Assignments */}
           <div className="lg:col-span-1">
-            <div className="bg-gradient-to-b from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 h-full">
+            <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-6 h-full">
               <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-xl">
+                <div className="p-2 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl shadow-lg shadow-cyan-500/20">
                   <Boxes className="w-5 h-5 text-white" />
                 </div>
                 <div className="min-w-0">
-                  <h2 className="text-lg font-bold text-gray-900">
+                  <h2 className="text-lg font-bold text-white">
                     Asignaciones
                   </h2>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-slate-400">
                     {leftView === "ITEMS"
                       ? "Lista por item"
                       : "Agrupado por cosecha"}
                   </p>
                 </div>
-                <span className="ml-auto px-3 py-1 bg-cyan-100 text-cyan-800 rounded-full text-sm font-semibold">
+                <span className="ml-auto px-3 py-1 bg-cyan-500/20 text-cyan-300 rounded-full text-sm font-semibold border border-cyan-500/30">
                   {leftView === "ITEMS"
                     ? asignacionesFiltradas.length
                     : cosechas.length}
@@ -716,8 +737,8 @@ export default function ProductionFillPage() {
                   onClick={() => setLeftView("ITEMS")}
                   className={`px-3 py-2.5 rounded-2xl border text-sm font-bold transition-all flex items-center justify-center gap-2 ${
                     leftView === "ITEMS"
-                      ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-cyan-500 shadow-lg"
-                      : "bg-white border-gray-200 text-gray-800 hover:border-cyan-300"
+                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500 shadow-lg shadow-cyan-500/20"
+                      : "bg-slate-800/50 border-slate-700/50 text-slate-300 hover:border-slate-600"
                   }`}
                 >
                   <List className="w-4 h-4" />
@@ -728,8 +749,8 @@ export default function ProductionFillPage() {
                   onClick={() => setLeftView("COSECHAS")}
                   className={`px-3 py-2.5 rounded-2xl border text-sm font-bold transition-all flex items-center justify-center gap-2 ${
                     leftView === "COSECHAS"
-                      ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-cyan-500 shadow-lg"
-                      : "bg-white border-gray-200 text-gray-800 hover:border-cyan-300"
+                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500 shadow-lg shadow-cyan-500/20"
+                      : "bg-slate-800/50 border-slate-700/50 text-slate-300 hover:border-slate-600"
                   }`}
                 >
                   <FolderTree className="w-4 h-4" />
@@ -740,14 +761,14 @@ export default function ProductionFillPage() {
               {leftView === "ITEMS" && (
                 <>
                   {hayCosechasReales && (
-                    <div className="mb-5 bg-white rounded-2xl border border-cyan-200/60 p-3 shadow-sm">
-                      <div className="text-xs text-gray-500 mb-2">
+                    <div className="mb-5 bg-slate-800/50 rounded-2xl border border-slate-700/50 p-3 shadow-sm">
+                      <div className="text-xs text-slate-400 mb-2">
                         Filtro por cosecha
                       </div>
                       <select
                         value={filtroCosechaKey}
                         onChange={(e) => setFiltroCosechaKey(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-cyan-200 bg-white text-gray-900 outline-none focus:ring-2 focus:ring-cyan-200"
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-700/50 bg-slate-800/50 text-white outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40"
                       >
                         <option value="TODAS">Todas</option>
                         {cosechas
@@ -768,7 +789,7 @@ export default function ProductionFillPage() {
                             onClick={() =>
                               setShowCosechaDetail(selectedAsigCosecha)
                             }
-                            className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-blue-50 text-cyan-800 font-semibold hover:from-cyan-100 hover:to-blue-100 transition-all"
+                            className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-300 font-semibold hover:bg-cyan-500/20 transition-all"
                           >
                             <Eye className="w-4 h-4" />
                             Ver detalle de cosecha
@@ -779,13 +800,13 @@ export default function ProductionFillPage() {
 
                   {!asignacionesFiltradas.length && !loadingAsig && (
                     <div className="text-center py-10">
-                      <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 flex items-center justify-center">
+                      <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                         <Boxes className="w-8 h-8 text-cyan-400" />
                       </div>
-                      <p className="text-gray-700 font-medium">
+                      <p className="text-white font-medium">
                         No hay asignaciones pendientes
                       </p>
-                      <p className="text-gray-500 text-sm mt-1">
+                      <p className="text-slate-400 text-sm mt-1">
                         Espera nuevas tareas de producción
                       </p>
                     </div>
@@ -801,30 +822,43 @@ export default function ProductionFillPage() {
                           onClick={() => setSelectedAsigId(a.id)}
                           className={`w-full text-left rounded-2xl border p-4 transition-all ${
                             active
-                              ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-cyan-500 shadow-lg"
-                              : "bg-white border-gray-200 text-gray-900 hover:border-cyan-300 hover:shadow-md"
+                              ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500 shadow-lg shadow-cyan-500/20"
+                              : "bg-slate-800/50 border-slate-700/50 text-white hover:border-slate-600 hover:shadow-md"
                           }`}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="font-bold truncate">
-                                {a.productoNombre}
-                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-bold truncate">
+                                  {a.productoNombre}
+                                </p>
+                                {/maquila/i.test(a.productoNombre) && (
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-black tracking-[0.1em] ${
+                                      active
+                                        ? "bg-amber-400 text-amber-950"
+                                        : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                    }`}
+                                  >
+                                    MAQUILA
+                                  </span>
+                                )}
+                              </div>
                               <p
-                                className={`text-xs font-mono mt-1 ${active ? "text-cyan-50" : "text-gray-500"}`}
+                                className={`text-xs font-mono mt-1 ${active ? "text-cyan-100" : "text-slate-400"}`}
                               >
                                 {a.productoCodigo}
                               </p>
                               {(a.cosechaCodigo || a.cosechaId) && (
                                 <p
-                                  className={`text-xs mt-1 ${active ? "text-cyan-50" : "text-cyan-700"}`}
+                                  className={`text-xs mt-1 ${active ? "text-cyan-100" : "text-cyan-400"}`}
                                 >
                                   Cosecha: {a.cosechaCodigo ?? a.cosechaId}
                                 </p>
                               )}
                             </div>
                             <div
-                              className={`px-3 py-1 rounded-full font-bold ${active ? "bg-white/20 text-white" : "bg-cyan-100 text-cyan-800"}`}
+                              className={`px-3 py-1 rounded-full font-bold ${active ? "bg-white/20 text-white" : "bg-cyan-500/20 text-cyan-300"}`}
                             >
                               {safeInt(a.cantidad, 0)}
                             </div>
@@ -840,8 +874,8 @@ export default function ProductionFillPage() {
                 <div className="space-y-3">
                   {!cosechas.length && !loadingAsig && (
                     <div className="text-center py-10">
-                      <FolderTree className="w-10 h-10 text-cyan-300 mx-auto mb-3" />
-                      <p className="text-gray-700 font-medium">
+                      <FolderTree className="w-10 h-10 text-cyan-400/30 mx-auto mb-3" />
+                      <p className="text-white font-medium">
                         No hay cosechas pendientes
                       </p>
                     </div>
@@ -852,27 +886,27 @@ export default function ProductionFillPage() {
                     return (
                       <div
                         key={c.cosechaKey}
-                        className="rounded-2xl border border-cyan-200 bg-white overflow-hidden shadow-sm"
+                        className="rounded-2xl border border-slate-700/50 bg-slate-800/30 overflow-hidden shadow-sm"
                       >
                         <button
                           type="button"
                           onClick={() => toggleCosecha(c.cosechaKey)}
-                          className="w-full p-4 flex items-center justify-between gap-3 hover:bg-cyan-50 transition-all"
+                          className="w-full p-4 flex items-center justify-between gap-3 hover:bg-slate-800/50 transition-all"
                         >
                           <div className="text-left min-w-0">
-                            <p className="font-bold text-gray-900 truncate">
+                            <p className="font-bold text-white truncate">
                               {c.cosechaKey === "SIN_COSECHA"
                                 ? "Sin cosecha"
                                 : (c.cosechaCodigo ??
                                   c.cosechaId ??
                                   c.cosechaKey)}
                             </p>
-                            <p className="text-xs text-gray-500">
+                            <p className="text-xs text-slate-400">
                               {c.totalItems} items · {c.totalBolsas} bolsas
                             </p>
                           </div>
                           <ChevronDown
-                            className={`w-5 h-5 text-cyan-600 transition-transform ${open ? "rotate-180" : ""}`}
+                            className={`w-5 h-5 text-cyan-400 transition-transform ${open ? "rotate-180" : ""}`}
                           />
                         </button>
 
@@ -887,23 +921,36 @@ export default function ProductionFillPage() {
                                   onClick={() => setSelectedAsigId(a.id)}
                                   className={`w-full text-left rounded-xl border p-3 transition-all ${
                                     active
-                                      ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-cyan-500"
-                                      : "bg-gray-50 border-gray-200 text-gray-900 hover:border-cyan-300"
+                                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500"
+                                      : "bg-slate-800/50 border-slate-700/50 text-white hover:border-slate-600"
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="min-w-0">
-                                      <p className="font-bold text-sm truncate">
-                                        {a.productoNombre}
-                                      </p>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="font-bold text-sm truncate">
+                                          {a.productoNombre}
+                                        </p>
+                                        {/maquila/i.test(a.productoNombre) && (
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black tracking-[0.1em] ${
+                                              active
+                                                ? "bg-amber-400 text-amber-950"
+                                                : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                            }`}
+                                          >
+                                            MAQUILA
+                                          </span>
+                                        )}
+                                      </div>
                                       <p
-                                        className={`text-xs font-mono ${active ? "text-cyan-50" : "text-gray-500"}`}
+                                        className={`text-xs font-mono ${active ? "text-cyan-100" : "text-slate-400"}`}
                                       >
                                         {a.productoCodigo}
                                       </p>
                                     </div>
                                     <span
-                                      className={`px-2 py-1 rounded-full text-xs font-bold ${active ? "bg-white/20 text-white" : "bg-cyan-100 text-cyan-800"}`}
+                                      className={`px-2 py-1 rounded-full text-xs font-bold ${active ? "bg-white/20 text-white" : "bg-cyan-500/20 text-cyan-300"}`}
                                     >
                                       {safeInt(a.cantidad, 0)}
                                     </span>
@@ -915,7 +962,7 @@ export default function ProductionFillPage() {
                             <button
                               type="button"
                               onClick={() => setShowCosechaDetail(c)}
-                              className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-cyan-200 bg-cyan-50 text-cyan-800 font-semibold hover:bg-cyan-100 transition-all"
+                              className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-300 font-semibold hover:bg-cyan-500/20 transition-all"
                             >
                               <Eye className="w-4 h-4" />
                               Ver detalle
@@ -930,25 +977,26 @@ export default function ProductionFillPage() {
             </div>
           </div>
 
+          {/* Right Panel - Stock Cards */}
           <div className="lg:col-span-3">
-            <div className="bg-gradient-to-b from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 min-h-[620px]">
+            <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-6 min-h-[620px]">
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-gradient-to-r from-purple-500 to-indigo-500 rounded-xl">
+                  <div className="p-2 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-xl shadow-lg shadow-cyan-500/20">
                     <BarChart3 className="w-5 h-5 text-white" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-bold text-gray-900">
+                    <h2 className="text-lg font-bold text-white">
                       Stock por Tipo de Hielo
                     </h2>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-slate-400">
                       Producción llena desde asignaciones, no desde almacén
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 px-4 py-2 bg-cyan-50 rounded-xl border border-cyan-200">
-                  <Zap className="w-4 h-4 text-cyan-600" />
-                  <span className="text-sm font-medium text-cyan-700">
+                <div className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 rounded-xl border border-cyan-500/20">
+                  <Zap className="w-4 h-4 text-cyan-400" />
+                  <span className="text-sm font-medium text-cyan-300">
                     {carouselCards.length} tipos activos
                   </span>
                 </div>
@@ -956,13 +1004,13 @@ export default function ProductionFillPage() {
 
               {!selectedAsig && (
                 <div className="text-center py-12">
-                  <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 flex items-center justify-center">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                     <BadgeCheck className="w-10 h-10 text-cyan-400" />
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  <h3 className="text-xl font-bold text-white mb-2">
                     Selecciona una Asignación
                   </h3>
-                  <p className="text-gray-600 max-w-md mx-auto">
+                  <p className="text-slate-400 max-w-md mx-auto">
                     Elige una bolsa en el panel izquierdo para comenzar el
                     llenado.
                   </p>
@@ -970,18 +1018,18 @@ export default function ProductionFillPage() {
               )}
 
               {!!selectedAsig && !selectedBV && (
-                <div className="bg-gradient-to-r from-amber-50 to-amber-100 rounded-2xl border border-amber-200 p-6 mb-6">
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-6 mb-6">
                   <div className="flex items-center gap-4">
-                    <div className="p-3 bg-gradient-to-r from-amber-500 to-amber-600 rounded-xl">
+                    <div className="p-3 bg-gradient-to-r from-amber-500 to-orange-500 rounded-xl shadow-lg">
                       <AlertTriangle className="w-6 h-6 text-white" />
                     </div>
                     <div>
-                      <p className="font-bold text-amber-800">
+                      <p className="font-bold text-amber-400">
                         Bolsa no encontrada
                       </p>
-                      <p className="text-amber-700 mt-1">
+                      <p className="text-amber-300/80 mt-1">
                         No se encontró la bolsa vacía para{" "}
-                        <b>{selectedAsig.productoCodigo}</b>.
+                        <b className="text-amber-300">{selectedAsig.productoCodigo}</b>.
                       </p>
                     </div>
                   </div>
@@ -990,70 +1038,89 @@ export default function ProductionFillPage() {
 
               {!!selectedAsig && !!selectedBV && (
                 <div className="relative">
-                  <div className="flex gap-6 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+                  <div className="flex gap-6 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-cyan-500/30 scrollbar-track-slate-800">
                     {carouselCards.map((c) => (
                       <div
                         key={c.key}
-                        className="min-w-[360px] bg-gradient-to-b from-white to-cyan-50 rounded-2xl border border-cyan-200 p-6 shadow-lg hover:shadow-xl transition-all duration-300 flex-shrink-0"
+                        className="min-w-[360px] bg-gradient-to-br from-slate-800/80 via-slate-900/80 to-cyan-900/30 rounded-2xl border border-slate-700/50 p-6 shadow-xl hover:shadow-2xl hover:shadow-cyan-500/10 hover:-translate-y-1 transition-all duration-300 flex-shrink-0"
                       >
-                        <div className="flex items-start justify-between gap-3 mb-6">
+                        {/* Glow Effect */}
+                        <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-cyan-400/5 blur-2xl group-hover:bg-cyan-400/15 transition-all duration-500" />
+
+                        <div className="flex items-start justify-between gap-3 mb-6 relative">
                           <div>
                             <div className="flex items-center gap-2 mb-3">
-                              <Thermometer className="w-5 h-5 text-cyan-500" />
-                              <span className="font-bold text-gray-900 text-lg">
-                                {c.pesoKg ?? "—"}kg ·{" "}
-                                {ETIQUETAS_TIPO_HIELO[c.tipoHielo]}
-                              </span>
+                              <Thermometer className="w-5 h-5 text-cyan-400" />
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-bold text-white text-lg">
+                                  {c.pesoKg ?? "—"}kg ·{" "}
+                                  {ETIQUETAS_TIPO_HIELO[c.tipoHielo]}
+                                </span>
+
+                                {c.esMaquila && (
+                                  <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] font-black tracking-[0.12em] text-amber-400 shadow-sm">
+                                    MAQUILA
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div className="text-sm text-cyan-600 bg-cyan-50 rounded-xl px-3 py-1.5 inline-block">
+                            <div
+                              className={[
+                                "text-sm rounded-xl px-3 py-1.5 inline-flex items-center gap-1.5 border font-medium",
+                                c.esMaquila
+                                  ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+                                  : "text-cyan-300 bg-cyan-500/10 border-cyan-500/30",
+                              ].join(" ")}
+                            >
                               {c.nombre} · {c.codigo}
+                              {c.esMaquila && <span className="font-black">· MAQUILA</span>}
                             </div>
                           </div>
 
                           <div
-                            className={`px-3 py-1.5 rounded-full font-bold ${c.ok ? "bg-emerald-500 text-white" : "bg-purple-500 text-white"}`}
+                            className={`px-3 py-1.5 rounded-full font-bold ${c.ok ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-amber-500/20 text-amber-300 border border-amber-500/30"}`}
                           >
                             {c.ok ? "OK" : "BAJO"}
                           </div>
                         </div>
 
                         <div className="grid grid-cols-2 gap-3 mb-5">
-                          <div className="rounded-xl bg-white border border-cyan-100 p-4">
-                            <p className="text-xs text-gray-500">Stock lleno</p>
-                            <p className="text-2xl font-black text-gray-900">
+                          <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
+                            <p className="text-xs text-slate-400">Stock lleno</p>
+                            <p className="text-2xl font-black text-white">
                               {safeNum(c.actual, 0)}
                             </p>
                           </div>
-                          <div className="rounded-xl bg-white border border-cyan-100 p-4">
-                            <p className="text-xs text-gray-500">
+                          <div className="rounded-xl bg-slate-800/50 border border-slate-700/50 p-4">
+                            <p className="text-xs text-slate-400">
                               Asignado pendiente
                             </p>
-                            <p className="text-2xl font-black text-cyan-700">
+                            <p className="text-2xl font-black text-cyan-300">
                               {safeInt(c.asignadoPendiente, 0)}
                             </p>
                           </div>
                         </div>
 
                         <div className="mb-5">
-                          <div className="flex justify-between text-xs text-gray-500 mb-2">
+                          <div className="flex justify-between text-xs text-slate-400 mb-2">
                             <span>Min: {safeNum(c.min, 0)}</span>
                             <span>Max: {safeNum(c.max, 0)}</span>
                           </div>
-                          <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-3 bg-slate-700/50 rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full"
+                              className="h-full bg-gradient-to-r from-cyan-400 to-blue-500 rounded-full"
                               style={{ width: `${pct(c.actual, c.max)}%` }}
                             />
                           </div>
                         </div>
 
                         <div className="space-y-3 mb-6">
-                          <div className="bg-gradient-to-r from-cyan-50 to-white rounded-xl p-3 border border-cyan-200">
+                          <div className="bg-slate-800/30 rounded-xl p-3 border border-slate-700/50">
                             <div className="flex items-center justify-between text-sm">
-                              <span className="text-cyan-700">
+                              <span className="text-slate-400">
                                 Total llenas del producto:
                               </span>
-                              <span className="font-bold text-gray-900">
+                              <span className="font-bold text-white">
                                 {safeNum(c.totalProducto, 0)}
                               </span>
                             </div>
@@ -1061,10 +1128,10 @@ export default function ProductionFillPage() {
                         </div>
 
                         {!c.hasRealStock && (
-                          <div className="mb-4 bg-gradient-to-r from-amber-50 to-amber-100 rounded-xl p-3 border border-amber-200">
+                          <div className="mb-4 bg-amber-500/10 rounded-xl p-3 border border-amber-500/30">
                             <div className="flex items-start gap-2">
-                              <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                              <p className="text-sm text-amber-800">
+                              <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                              <p className="text-sm text-amber-300">
                                 No hay stock agregado encontrado. Mostrando
                                 valores en 0 para operar.
                               </p>
@@ -1081,21 +1148,22 @@ export default function ProductionFillPage() {
                           className={`w-full rounded-xl py-3.5 font-bold transition-all duration-300 shadow-lg ${
                             !selectedAsig ||
                             safeInt(selectedAsig?.cantidad, 0) <= 0
-                              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                              : "bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:from-cyan-700 hover:to-blue-700 hover:shadow-xl"
+                              ? "bg-slate-700/50 text-slate-400 cursor-not-allowed"
+                              : "bg-gradient-to-r from-cyan-600 to-blue-700 text-white hover:from-cyan-700 hover:to-blue-800 hover:shadow-xl hover:shadow-cyan-500/20 hover:-translate-y-0.5"
                           }`}
                           type="button"
                         >
                           <div className="flex items-center justify-center gap-2">
                             <Package className="w-5 h-5" />
                             Llenar {ETIQUETAS_TIPO_HIELO[c.tipoHielo]}
+                            {c.esMaquila ? " · MAQUILA" : ""}
                           </div>
                         </button>
                       </div>
                     ))}
                   </div>
 
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-10 h-10 bg-gradient-to-l from-white to-transparent flex items-center justify-center">
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-10 h-10 bg-gradient-to-l from-slate-900/70 to-transparent flex items-center justify-center">
                     <ChevronRight className="w-6 h-6 text-cyan-400" />
                   </div>
                 </div>
@@ -1103,13 +1171,13 @@ export default function ProductionFillPage() {
 
               {!!selectedAsig && !!selectedBV && !carouselCards.length && (
                 <div className="text-center py-12">
-                  <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 flex items-center justify-center">
+                  <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                     <Layers className="w-10 h-10 text-cyan-400" />
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  <h3 className="text-xl font-bold text-white mb-2">
                     Sin Tipos Configurados
                   </h3>
-                  <p className="text-gray-600 max-w-md mx-auto">
+                  <p className="text-slate-400 max-w-md mx-auto">
                     Este producto no tiene tipos de hielo configurados.
                   </p>
                 </div>
@@ -1119,6 +1187,7 @@ export default function ProductionFillPage() {
         </div>
       </div>
 
+      {/* Cosecha Detail Modal */}
       <Modal
         open={!!showCosechaDetail}
         title={`Detalle de cosecha: ${
@@ -1135,15 +1204,15 @@ export default function ProductionFillPage() {
         {!showCosechaDetail ? null : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-cyan-50 border border-cyan-200 p-4">
-                <p className="text-xs text-cyan-700">Items</p>
-                <p className="text-2xl font-black text-gray-900">
+              <div className="rounded-2xl bg-cyan-500/10 border border-cyan-500/30 p-4">
+                <p className="text-xs text-cyan-400">Items</p>
+                <p className="text-2xl font-black text-white">
                   {showCosechaDetail.totalItems}
                 </p>
               </div>
-              <div className="rounded-2xl bg-blue-50 border border-blue-200 p-4">
-                <p className="text-xs text-blue-700">Bolsas pendientes</p>
-                <p className="text-2xl font-black text-gray-900">
+              <div className="rounded-2xl bg-blue-500/10 border border-blue-500/30 p-4">
+                <p className="text-xs text-blue-400">Bolsas pendientes</p>
+                <p className="text-2xl font-black text-white">
                   {showCosechaDetail.totalBolsas}
                 </p>
               </div>
@@ -1158,18 +1227,25 @@ export default function ProductionFillPage() {
                     setSelectedAsigId(a.id);
                     setShowCosechaDetail(null);
                   }}
-                  className="w-full text-left rounded-2xl border border-gray-200 bg-white p-4 hover:border-cyan-300 hover:bg-cyan-50 transition-all"
+                  className="w-full text-left rounded-2xl border border-slate-700/50 bg-slate-800/30 p-4 hover:border-cyan-500/30 hover:bg-slate-800/50 transition-all"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-bold text-gray-900 truncate">
-                        {a.productoNombre}
-                      </p>
-                      <p className="text-xs text-gray-500 font-mono">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-bold text-white truncate">
+                          {a.productoNombre}
+                        </p>
+                        {/maquila/i.test(a.productoNombre) && (
+                          <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[9px] font-black tracking-[0.1em] text-amber-400">
+                            MAQUILA
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400 font-mono">
                         {a.productoCodigo}
                       </p>
                     </div>
-                    <span className="px-3 py-1 rounded-full bg-cyan-100 text-cyan-800 font-bold">
+                    <span className="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-300 font-bold">
                       {safeInt(a.cantidad, 0)}
                     </span>
                   </div>
@@ -1180,6 +1256,7 @@ export default function ProductionFillPage() {
         )}
       </Modal>
 
+      {/* Fill Modal */}
       <Modal
         open={openFill}
         title="Llenar Bolsas"
@@ -1187,39 +1264,54 @@ export default function ProductionFillPage() {
       >
         {!selectedAsig ? (
           <div className="text-center py-8">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 flex items-center justify-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
               <AlertTriangle className="w-8 h-8 text-cyan-400" />
             </div>
-            <p className="text-gray-700 font-medium">
+            <p className="text-white font-medium">
               Selecciona una asignación primero
             </p>
           </div>
         ) : (
           <>
-            <div className="mb-6 p-4 bg-gradient-to-r from-cyan-50 to-blue-50 rounded-xl border border-cyan-200">
+            <div className="mb-6 p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 rounded-xl border border-cyan-500/20">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-lg">
+                <div className="p-2 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-lg shadow-lg shadow-cyan-500/20">
                   <Package className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-gray-900">
-                    {selectedAsig.productoNombre}
-                  </h4>
-                  <p className="text-sm text-gray-600">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="font-bold text-white">
+                      {selectedAsig.productoNombre}
+                    </h4>
+
+                    {selectedEsMaquila && (
+                      <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] font-black tracking-[0.12em] text-amber-400">
+                        MAQUILA
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-sm text-slate-400">
                     {selectedAsig.productoCodigo} ·{" "}
                     {selectedAsig.pesoKg != null
                       ? `${selectedAsig.pesoKg}kg`
                       : ""}
                   </p>
+
+                  {selectedEsMaquila && (
+                    <p className="mt-2 text-xs font-bold text-amber-400">
+                      Esta asignación corresponde a producto de MAQUILA.
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">
+                  <span className="text-sm text-slate-400">
                     Disponible para llenar:
                   </span>
-                  <span className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-full font-bold">
+                  <span className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-full font-bold shadow-lg shadow-cyan-500/20">
                     {safeInt(selectedAsig.cantidad, 0)} unidades
                   </span>
                 </div>
@@ -1227,8 +1319,8 @@ export default function ProductionFillPage() {
             </div>
 
             <div className="mb-6">
-              <label className="text-sm font-medium text-gray-900 mb-2 flex items-center gap-2">
-                <Factory className="w-4 h-4 text-cyan-600" />
+              <label className="text-sm font-medium text-white mb-2 flex items-center gap-2">
+                <Factory className="w-4 h-4 text-cyan-400" />
                 Máquina de Producción
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -1239,8 +1331,8 @@ export default function ProductionFillPage() {
                     onClick={() => setFillMaquina(m)}
                     className={`px-4 py-3 rounded-xl border text-center transition-all duration-200 ${
                       fillMaquina === m
-                        ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white border-cyan-500 shadow-lg"
-                        : "bg-white text-gray-800 border-gray-200 hover:border-cyan-300 hover:bg-cyan-50"
+                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white border-cyan-500 shadow-lg shadow-cyan-500/20"
+                        : "bg-slate-800/50 text-slate-300 border-slate-700/50 hover:border-slate-600 hover:bg-slate-800"
                     }`}
                   >
                     {m}
@@ -1250,7 +1342,7 @@ export default function ProductionFillPage() {
             </div>
 
             <div className="mb-6">
-              <label className="text-sm font-medium text-gray-900 mb-2 block">
+              <label className="text-sm font-medium text-white mb-2 block">
                 Tipo de hielo
               </label>
               <select
@@ -1259,7 +1351,7 @@ export default function ProductionFillPage() {
                   setFillTipo(e.target.value as IceType);
                   setFillBarraCodigo("");
                 }}
-                className="w-full px-4 py-3 rounded-xl border border-cyan-300 bg-white text-gray-900 outline-none focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400 transition-all duration-200"
+                className="w-full px-4 py-3 rounded-xl border border-slate-700/50 bg-slate-800/50 text-white outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40 transition-all duration-200"
               >
                 {tiposPermitidos.map((t) => (
                   <option key={t} value={t}>
@@ -1271,13 +1363,13 @@ export default function ProductionFillPage() {
 
             {fillTipo === "BARRA" && (
               <div className="mb-6">
-                <label className="text-sm font-medium text-gray-900 mb-2 block">
+                <label className="text-sm font-medium text-white mb-2 block">
                   Barra origen
                 </label>
                 <select
                   value={fillBarraCodigo}
                   onChange={(e) => setFillBarraCodigo(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-purple-300 bg-white text-gray-900 outline-none focus:ring-2 focus:ring-purple-300 focus:border-purple-400 transition-all duration-200"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-700/50 bg-slate-800/50 text-white outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40 transition-all duration-200"
                 >
                   <option value="">Selecciona una barra...</option>
                   {barrasDisponibles.map((b) => (
@@ -1286,14 +1378,14 @@ export default function ProductionFillPage() {
                     </option>
                   ))}
                 </select>
-                <p className="mt-2 text-xs text-purple-600">
+                <p className="mt-2 text-xs text-cyan-400">
                   Regla: 1 cuarto por bolsa llenada
                 </p>
               </div>
             )}
 
             <div className="mb-8">
-              <label className="text-sm font-medium text-gray-900 mb-2 block">
+              <label className="text-sm font-medium text-white mb-2 block">
                 Cantidad a llenar
               </label>
               <div className="relative">
@@ -1312,16 +1404,16 @@ export default function ProductionFillPage() {
                     }
                     setFillCantidad(safeInt(raw, 1));
                   }}
-                  className="w-full px-4 py-3 rounded-xl border border-cyan-300 bg-white text-gray-900 text-center text-lg font-bold outline-none focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400 transition-all duration-200"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-700/50 bg-slate-800/50 text-white text-center text-lg font-bold outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40 transition-all duration-200"
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-cyan-500 font-medium">
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-cyan-400 font-medium">
                   unidades
                 </div>
               </div>
               <div className="mt-2 flex justify-between items-center">
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-slate-400">
                   Máximo asignado:{" "}
-                  <b className="text-gray-900">
+                  <b className="text-white">
                     {safeInt(selectedAsig.cantidad, 0)}
                   </b>
                 </span>
@@ -1330,7 +1422,7 @@ export default function ProductionFillPage() {
                   onClick={() =>
                     setFillCantidad(safeInt(selectedAsig.cantidad, 0))
                   }
-                  className="text-xs px-3 py-1 bg-cyan-100 text-cyan-700 rounded-lg hover:bg-cyan-200 transition-colors"
+                  className="text-xs px-3 py-1 bg-cyan-500/20 text-cyan-300 rounded-lg hover:bg-cyan-500/30 transition-colors border border-cyan-500/30"
                 >
                   Usar máximo
                 </button>
@@ -1342,8 +1434,8 @@ export default function ProductionFillPage() {
               disabled={saving || !fillMaquina}
               className={`w-full rounded-xl py-4 font-bold transition-all duration-300 shadow-lg ${
                 saving || !fillMaquina
-                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                  : "bg-gradient-to-r from-cyan-600 to-blue-600 text-white hover:from-cyan-700 hover:to-blue-700 hover:shadow-xl"
+                  ? "bg-slate-700/50 text-slate-400 cursor-not-allowed"
+                  : "bg-gradient-to-r from-cyan-600 to-blue-700 text-white hover:from-cyan-700 hover:to-blue-800 hover:shadow-xl hover:shadow-cyan-500/20 hover:-translate-y-0.5"
               }`}
               type="button"
             >
@@ -1355,7 +1447,7 @@ export default function ProductionFillPage() {
               ) : (
                 <div className="flex items-center justify-center gap-2">
                   <CheckCircle2 className="w-5 h-5" />
-                  Confirmar Llenado
+                  Confirmar Llenado{selectedEsMaquila ? " · MAQUILA" : ""}
                 </div>
               )}
             </button>

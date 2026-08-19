@@ -132,6 +132,149 @@ function safeMeta(tipo: TipoMovimiento) {
   }
 }
 
+
+function toNumberSafe(v: any): number | null {
+  if (v === null || v === undefined) return null;
+
+  const n =
+    typeof v === 'string'
+      ? Number(String(v).trim().replace(',', '.'))
+      : Number(v);
+
+  return Number.isFinite(n) ? n : null;
+}
+
+function isSalidaMovimiento(tipo: unknown): boolean {
+  const t = String(tipo ?? '').trim().toUpperCase();
+
+  return (
+    t === 'SALIDA' ||
+    t === 'SALIDA_BOLSA' ||
+    t === 'SALIDA_STOCK' ||
+    t.startsWith('SALIDA_')
+  );
+}
+
+function getBatchItems(m: any): any[] {
+  return Array.isArray(m?.items) ? m.items.filter(Boolean) : [];
+}
+
+function getMovimientoQty(m: any): number {
+  const candidates = [
+    m?.deltaPrincipal,
+    m?.cantidad,
+    m?.qty,
+    m?.cantidadBolsas,
+    m?.cantidadBolsa,
+    m?.cantidadBarra,
+    m?.cuartosUsados,
+    m?.cuartos,
+    m?.unidades,
+    m?.total,
+  ];
+
+  for (const candidate of candidates) {
+    const n = toNumberSafe(candidate);
+    if (n !== null) return n;
+  }
+
+  return 0;
+}
+
+function getBatchSignedQty(m: any): number | null {
+  const items = getBatchItems(m);
+
+  if (!isSalidaMovimiento(m?.tipo) || !items.length) {
+    return null;
+  }
+
+  // Si cada item trae delta, respetamos esos signos.
+  const deltaTotal = items.reduce((acc, it) => {
+    const delta = toNumberSafe(it?.delta);
+    return acc + (delta ?? 0);
+  }, 0);
+
+  if (deltaTotal !== 0) {
+    return deltaTotal;
+  }
+
+  // Compatibilidad con batches viejos que sólo guardan cantidad.
+  const qtyTotal = items.reduce((acc, it) => {
+    const qty =
+      toNumberSafe(it?.cantidad) ??
+      toNumberSafe(it?.qty) ??
+      toNumberSafe(it?.cantidadBolsas) ??
+      0;
+
+    return acc + Math.abs(qty);
+  }, 0);
+
+  return qtyTotal > 0 ? -qtyTotal : 0;
+}
+
+function getSignedQty(m: any): number {
+  const batchSigned = getBatchSignedQty(m);
+
+  if (batchSigned !== null) {
+    return batchSigned;
+  }
+
+  const deltaPrincipal = toNumberSafe(m?.deltaPrincipal);
+
+  if (deltaPrincipal !== null) {
+    return deltaPrincipal;
+  }
+
+  const meta = safeMeta(m?.tipo as TipoMovimiento);
+  const qty = getMovimientoQty(m);
+
+  return meta.esEntrada ? Math.abs(qty) : -Math.abs(qty);
+}
+
+function getItemSignedQty(it: any): number {
+  const delta = toNumberSafe(it?.delta);
+
+  if (delta !== null && delta !== 0) {
+    return delta;
+  }
+
+  const qty =
+    toNumberSafe(it?.cantidad) ??
+    toNumberSafe(it?.qty) ??
+    toNumberSafe(it?.cantidadBolsas) ??
+    0;
+
+  return -Math.abs(qty);
+}
+
+function getMovimientoProductoDisplay(m: any): {
+  titulo: string;
+  codigo: string;
+  esBatch: boolean;
+  items: any[];
+} {
+  const items = getBatchItems(m);
+  const esBatch = isSalidaMovimiento(m?.tipo) && items.length > 0;
+
+  if (!esBatch) {
+    return {
+      titulo: String(m?.productoNombre ?? '—'),
+      codigo: String(m?.productoCodigo ?? '—'),
+      esBatch: false,
+      items: [],
+    };
+  }
+
+  const n = items.length;
+
+  return {
+    titulo: `Salida · ${n} producto${n === 1 ? '' : 's'}`,
+    codigo: String(m?.codigo ?? m?.id ?? 'BATCH'),
+    esBatch: true,
+    items,
+  };
+}
+
 /* ============================================================
   Types
 ============================================================ */
@@ -245,7 +388,7 @@ export default function HistorialMovimientosPage() {
     if (filters.hielos.length) params.set('hielos', filters.hielos.join(','));
 
     const qs = params.toString();
-    const url = qs ? `/admin/reportes/historial-movimientos?${qs}` : `/admin/reportes/historial-movimientos`;
+    const url = qs ? `/admin/reportes/historial?${qs}` : `/admin/reportes/historia`;
     window.history.replaceState(null, '', url);
   }, [filters]);
 
@@ -297,11 +440,11 @@ export default function HistorialMovimientosPage() {
       { codigo: string; nombre: string; tipoProducto?: any; status?: any; kg?: number; count: number }
     >();
 
-    for (const m of rows as any[]) {
-      const codigo = String(m?.productoCodigo ?? '').trim();
-      if (!codigo) continue;
+    const addProducto = (p: any) => {
+      const codigo = String(p?.productoCodigo ?? p?.bolsaVaciaCodigo ?? '').trim();
+      if (!codigo) return;
 
-      const nombre = String(m?.productoNombre ?? codigo);
+      const nombre = String(p?.productoNombre ?? codigo);
       const kg = guessKgFromName(nombre);
       const prev = map.get(codigo);
 
@@ -309,16 +452,29 @@ export default function HistorialMovimientosPage() {
         map.set(codigo, {
           codigo,
           nombre,
-          tipoProducto: m?.tipoProducto,
-          status: m?.status,
+          tipoProducto: p?.tipoProducto,
+          status: p?.status,
           kg,
           count: 1,
         });
       } else {
         prev.count += 1;
+
         if (!prev.kg && kg) prev.kg = kg;
-        if (!prev.status && m?.status) prev.status = m?.status;
-        if (!prev.tipoProducto && m?.tipoProducto) prev.tipoProducto = m?.tipoProducto;
+        if (!prev.status && p?.status) prev.status = p?.status;
+        if (!prev.tipoProducto && p?.tipoProducto) prev.tipoProducto = p?.tipoProducto;
+      }
+    };
+
+    for (const m of rows as any[]) {
+      const items = getBatchItems(m);
+
+      if (isSalidaMovimiento(m?.tipo) && items.length) {
+        for (const it of items) {
+          addProducto(it);
+        }
+      } else {
+        addProducto(m);
       }
     }
 
@@ -345,19 +501,36 @@ export default function HistorialMovimientosPage() {
       const fecha = toDateSafe(m.fecha);
       if (!inRange(fecha)) return false;
 
-      // ✅ Producto (vinculado)
+      const items = getBatchItems(m);
+
+      // ✅ Producto (también dentro de salidas batch)
       if (filters.productoCodigo) {
-        const pc = String(m.productoCodigo ?? '').trim();
-        if (pc !== filters.productoCodigo) return false;
+        const rootCodigo = String(m.productoCodigo ?? '').trim();
+
+        const itemMatch = items.some((it) => {
+          const codigo = String(it?.productoCodigo ?? it?.bolsaVaciaCodigo ?? '').trim();
+          return codigo === filters.productoCodigo;
+        });
+
+        if (rootCodigo !== filters.productoCodigo && !itemMatch) {
+          return false;
+        }
       }
 
       if (filters.tipos.length && !filters.tipos.includes(m.tipo)) return false;
       if (filters.turnos.length && !filters.turnos.includes(m.turno)) return false;
 
       if (filters.hielos.length) {
-        const h = m.tipoHielo;
-        if (!isIceType(h)) return false;
-        if (!filters.hielos.includes(h)) return false;
+        const rootHielo = m.tipoHielo;
+        const rootMatch = isIceType(rootHielo) && filters.hielos.includes(rootHielo);
+
+        const itemMatch = items.some(
+          (it) => isIceType(it?.tipoHielo) && filters.hielos.includes(it.tipoHielo),
+        );
+
+        if (!rootMatch && !itemMatch) {
+          return false;
+        }
       }
 
       if (filters.origin !== 'TODOS') {
@@ -370,6 +543,17 @@ export default function HistorialMovimientosPage() {
       if (!q) return true;
 
       const meta = safeMeta(m.tipo as TipoMovimiento);
+
+      const itemsText = getBatchItems(m)
+        .flatMap((it) => [
+          it?.productoNombre,
+          it?.productoCodigo,
+          it?.bolsaVaciaCodigo,
+          it?.tipoHielo,
+          it?.cantidad,
+          it?.delta,
+        ])
+        .join(' ');
 
       return [
         m.codigo,
@@ -391,6 +575,7 @@ export default function HistorialMovimientosPage() {
         m.observaciones ?? '',
         m.maquina ?? '',
         m.ubicacion ?? '',
+        itemsText,
       ]
         .join(' ')
         .toLowerCase()
@@ -471,7 +656,7 @@ export default function HistorialMovimientosPage() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 p-4 md:p-6 text-zinc-100">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-950 to-black p-4 md:p-6 text-zinc-100">
       {/* Print styles */}
       <style>{`
         @media print {
@@ -497,8 +682,8 @@ export default function HistorialMovimientosPage() {
             Volver
           </button>
           <div>
-            <h1 className="text-xl font-bold">Historial de Movimientos</h1>
-            <p className="text-xs text-zinc-400">Paginado + filtros + export · vinculado con Reportes/Monitoreo</p>
+            <h1 className="text-2xl font-bold text-white">Historial de Movimientos</h1>
+            <p className="text-xs text-zinc-400">Consulta completa, paginación, filtros y salidas batch</p>
           </div>
         </div>
 
@@ -790,7 +975,14 @@ export default function HistorialMovimientosPage() {
                 pageItems.map((m: any) => {
                   const meta = safeMeta(m.tipo as TipoMovimiento);
                   const fecha = toDateSafe(m.fecha);
-                  const cantidad = Math.abs(Number(m.deltaPrincipal ?? m.cantidad ?? 0));
+
+                  const signedQty = getSignedQty(m);
+                  const cantidad = Math.abs(signedQty);
+                  const isSalida = signedQty < 0;
+
+                  const productoDisplay = getMovimientoProductoDisplay(m);
+                  const batchItems = productoDisplay.items;
+
                   const maquina = String(m.maquina ?? '').trim() || '—';
                   const ubicacion = String(m.ubicacion ?? '').trim() || '—';
                   const userLabel = `${m.usuarioNombre ?? ''}`.trim() || m.usuarioCodigo || '—';
@@ -817,18 +1009,111 @@ export default function HistorialMovimientosPage() {
                       </td>
 
                       <td className="px-4 py-3">
-                        <div className="flex flex-col">
-                          <span className="text-zinc-100">{m.productoNombre ?? '—'}</span>
-                          <span className="text-xs text-zinc-500 print-text-muted">{m.productoCodigo ?? '—'}</span>
+                        {productoDisplay.esBatch ? (
+                          <div className="min-w-[320px]">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-100">
+                                {productoDisplay.titulo}
+                              </span>
+
+                              <span className="rounded-full border border-blue-700/40 bg-blue-950/30 px-2 py-0.5 text-[10px] font-bold text-blue-300">
+                                BATCH
+                              </span>
+                            </div>
+
+                            <div className="mt-2 space-y-1.5">
+                              {batchItems.map((it: any, idx: number) => {
+                                const itemSigned = getItemSignedQty(it);
+                                const itemCodigo = String(
+                                  it?.productoCodigo ?? it?.bolsaVaciaCodigo ?? '—',
+                                );
+
+                                return (
+                                  <div
+                                    key={`${itemCodigo}-${it?.tipoHielo ?? 'sin-tipo'}-${idx}`}
+                                    className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="truncate text-xs font-medium text-zinc-200">
+                                        {it?.productoNombre ?? 'Producto'}
+                                      </div>
+
+                                      <div className="text-[10px] text-zinc-500 print-text-muted">
+                                        {itemCodigo}
+                                        {it?.tipoHielo ? ` · ${labelHielo(it.tipoHielo)}` : ''}
+                                      </div>
+                                    </div>
+
+                                    <div className="shrink-0 text-xs font-bold text-rose-400">
+                                      −{Math.abs(itemSigned).toLocaleString('es-MX')}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col">
+                            <span className="text-zinc-100">{productoDisplay.titulo}</span>
+                            <span className="text-xs text-zinc-500 print-text-muted">
+                              {productoDisplay.codigo}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <div
+                          className={
+                            isSalida
+                              ? 'font-bold text-rose-400'
+                              : 'font-bold text-emerald-400'
+                          }
+                        >
+                          {isSalida ? '−' : '+'}
+                          {Number.isFinite(cantidad)
+                            ? cantidad.toLocaleString('es-MX')
+                            : '0'}
+                        </div>
+
+                        <div className="mt-1 text-[10px] text-zinc-500 print-text-muted">
+                          {productoDisplay.esBatch
+                            ? `${batchItems.length} item${batchItems.length === 1 ? '' : 's'}`
+                            : `raw: ${String(
+                                m.deltaPrincipal ?? m.cantidad ?? m.qty ?? '—',
+                              )}`}
                         </div>
                       </td>
 
-                      <td className="px-4 py-3 text-right text-zinc-100 tabular-nums">
-                        {Number.isFinite(cantidad) ? cantidad.toLocaleString('es-MX') : '0'}
-                      </td>
+                      {/* ✅ Hielo también compatible con salidas batch */}
+                      <td className="px-4 py-3 text-zinc-200">
+                        {productoDisplay.esBatch ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {Array.from(
+                              new Set(
+                                batchItems
+                                  .map((it: any) =>
+                                    isIceType(it?.tipoHielo) ? it.tipoHielo : null,
+                                  )
+                                  .filter(Boolean),
+                              ),
+                            ).map((h) => (
+                              <span
+                                key={String(h)}
+                                className="inline-flex rounded-full border border-cyan-800/40 bg-cyan-950/30 px-2 py-1 text-[10px] font-medium text-cyan-300"
+                              >
+                                {labelHielo(h)}
+                              </span>
+                            ))}
 
-                      {/* ✅ FIX TS7053 aplicado */}
-                      <td className="px-4 py-3 text-zinc-200">{labelHielo(m.tipoHielo)}</td>
+                            {!batchItems.some((it: any) => isIceType(it?.tipoHielo)) && (
+                              <span className="text-zinc-500">—</span>
+                            )}
+                          </div>
+                        ) : (
+                          labelHielo(m.tipoHielo)
+                        )}
+                      </td>
 
                       <td className="px-4 py-3 text-zinc-200">{m.turno ?? '—'}</td>
                       <td className="px-4 py-3 text-zinc-200">{maquina}</td>

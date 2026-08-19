@@ -1,29 +1,5 @@
-// app/admin/dashboard/inventario/page.tsx
-// ✅ INVENTARIO (ADMIN) — COMPLETO + MERMAS DESDE AQUÍ
-// Reglas:
-//   - MERMA = RESTA (BOLSA llena / BOLSA_VACIA / BARRA (cuartos))
-//   - SALIDA = RESTA
-//   - DEVOLUCIÓN = SUMA
-//   - LLENADO = SUMA
-//
-// ✅ DIFERENCIACIÓN CORRECTA:
-//   - BOLSA LLENA: resta stockPorHielo[tipo].stockActual en BVxxx
-//   - BOLSA_VACIA: resta cantidad en BVxxx
-//   - BARRA: resta cuartosDisponibles o cuartosUsados en BRxxx (elige fuente)
-//
-// ✅ UI DELTAS (movimientos):
-//   - Ajusta stock mostrado usando colección movimientos (deltas UI)
-//   - NO re-aplica deltas si movimiento trae afectaStock:true (evita doble conteo)
-//   - 🔥 FIX: merma/salida NUNCA suman (aunque el movimiento venga raro)
-//
-// ✅ MERMAS DESDE INVENTARIO:
-//   - Botones de Merma en: bolsas llenas (por producto+tipo), bolsas vacías, barras
-//   - Modal único que detecta el tipo y pide fuente en BARRA (DISPONIBLES/USADOS)
-//   - ✅ Razones preset + detalle (Diferencia inventario, producto derramado, bolsa rota, etc.)
-//
-// ✅ CÁMARA FRÍA:
-//   - Total general, total por tipo (incluye BARRA como “bolsas tipo BARRA”)
-//   - Totales por KG (sumando tipos)
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 
 'use client';
 
@@ -110,9 +86,74 @@ const normalizeIceType = (raw: unknown): IceType | null => {
   return (TIPOS_HIELO as readonly string[]).includes(v) ? (v as IceType) : null;
 };
 
-const buildNombreBolsaLlena = (pesoKg: number) => {
+const buildNombreBolsaLlena = (pesoKg: number, nombreBV?: string) => {
   const kg = safeNum(pesoKg, 0);
-  return kg > 0 ? `Bolsa llena ${kg}kg` : 'Bolsa llena';
+  const nombreBolsaVacia = String(nombreBV ?? '').trim();
+  const esMaquila = /maquila/i.test(nombreBolsaVacia);
+
+  if (kg <= 0) {
+    return esMaquila ? 'Bolsa llena MAQUILA' : 'Bolsa llena';
+  }
+
+  return esMaquila
+    ? `Bolsa llena ${kg}kg MAQUILA`
+    : `Bolsa llena ${kg}kg`;
+};
+
+const esBolsaMaquila = (nombreBV: unknown) => /maquila/i.test(String(nombreBV ?? '').trim());
+
+/**
+ * Reglas VISUALES del catálogo de cámara fría.
+ * No cambian Firestore ni la lógica de stock.
+ *
+ * Se muestran:
+ * - Todas las configuraciones con stock > 0
+ * - Aunque estén en 0:
+ *   3kg ROLITO
+ *   5kg ROLITO normal
+ *   5kg ROLITO maquila
+ *   5kg GOURMET
+ *   10kg ENFRIAR
+ *   15kg ROLITO
+ *   15kg FRAPPE
+ *   20kg BARRA
+ */
+const mantenerConfiguracionEnCero = (opts: {
+  pesoKg: number;
+  tipoHielo: IceType;
+  esMaquila: boolean;
+}) => {
+  const kg = safeNum(opts.pesoKg, 0);
+  const tipo = opts.tipoHielo;
+
+  if (kg === 3 && tipo === 'ROLITO') return true;
+
+  if (kg === 5 && tipo === 'ROLITO') {
+    // Aplica tanto a la bolsa normal como a la de maquila.
+    return true;
+  }
+
+  if (kg === 5 && tipo === 'GOURMET') return true;
+  if (kg === 10 && tipo === 'ENFRIAR') return true;
+  if (kg === 15 && (tipo === 'ROLITO' || tipo === 'FRAPPE')) return true;
+  if (kg === 20 && tipo === 'BARRA') return true;
+
+  return false;
+};
+
+const debeMostrarConfiguracion = (opts: {
+  stockActual: number;
+  pesoKg: number;
+  tipoHielo: IceType;
+  esMaquila: boolean;
+}) => {
+  if (safeNum(opts.stockActual, 0) > 0) return true;
+
+  return mantenerConfiguracionEnCero({
+    pesoKg: opts.pesoKg,
+    tipoHielo: opts.tipoHielo,
+    esMaquila: opts.esMaquila,
+  });
 };
 
 function extractKgFromNombre(nombre: unknown): number | null {
@@ -295,16 +336,6 @@ function computeCuartosUI(raw: { tot: number; cuartosDisponibles?: unknown; cuar
   return { tot, disponibles, usados };
 }
 
-const capCuartosBarra = (b: unknown) => {
-  const bb = b as any;
-  const maxBarras = safeNum(bb?.stockMaximo, 0);
-  const cap = Math.max(0, Math.floor(maxBarras * 4));
-  if (cap > 0) return cap;
-
-  const cantidad = safeNum(bb?.cantidad, 0);
-  const tot = Math.max(0, Math.floor(safeNum(bb?.cuartosTotales, cantidad * 4)));
-  return tot;
-};
 
 /* ================= page ================= */
 type Movimiento = {
@@ -573,39 +604,93 @@ export default function InventarioAdminPage() {
   }, [stockLlenoTotalPorTipoUI]);
 
   // =======================
-  // ✅ CÁMARA FRÍA (resumen por KG)
+  // ✅ CÁMARA FRÍA — PRESENTACIONES REALES
+  //    Visual solamente:
+  //    - separa cada BV/presentación
+  //    - distingue NORMAL / MAQUILA
+  //    - oculta configuraciones en 0 salvo las permitidas
   // =======================
-  const camaraPorKg = useMemo(() => {
-    const map = new Map<number, Record<IceType, number>>();
+  const camaraPorPresentacion = useMemo(() => {
+    const rows: Array<{
+      key: string;
+      codigoBV: string;
+      nombreBV: string;
+      nombreLleno: string;
+      esMaquila: boolean;
+      kg: number;
+      tipos: Array<{
+        tipoHielo: IceType;
+        stockActual: number;
+      }>;
+      total: number;
+    }> = [];
 
     for (const p of stockLlenoPorProductoUI ?? []) {
-      const codigo = String((p as any)?.bolsaVaciaCodigo ?? '').trim().toUpperCase();
-      if (!codigo) continue;
+      const codigoBV = String((p as any)?.bolsaVaciaCodigo ?? '').trim().toUpperCase();
+      if (!codigoBV) continue;
 
-      const bv = (bolsasVacias ?? []).find((x: any) => String(x.codigo).trim().toUpperCase() === codigo);
+      const bv = (bolsasVacias ?? []).find(
+        (x: any) => String(x?.codigo ?? '').trim().toUpperCase() === codigoBV,
+      );
+      if (!bv) continue;
+
       const kg = safeNum((p as any)?.pesoKg ?? (bv as any)?.pesoKg, 0);
       if (!(kg > 0)) continue;
 
-      if (!map.has(kg)) {
-        map.set(kg, { ROLITO: 0, FRAPPE: 0, GOURMET: 0, ENFRIAR: 0, BARRA: 0 });
-      }
+      const nombreBV = String((p as any)?.productoNombre ?? (bv as any)?.nombre ?? '').trim();
+      const esMaquila = esBolsaMaquila(nombreBV);
+      const nombreLleno = buildNombreBolsaLlena(kg, nombreBV);
 
-      const bucket = map.get(kg)!;
+      const tipos = ((p as any)?.tipos ?? [])
+        .map((t: any) => {
+          const tipoHielo = normalizeIceType(t?.tipoHielo);
+          if (!tipoHielo) return null;
 
-      for (const t of (p as any)?.tipos ?? []) {
-        const tipo = normalizeIceType(t?.tipoHielo);
-        if (!tipo) continue;
-        bucket[tipo] += safeNum(t?.stockActual, 0);
-      }
+          const stockActual = Math.max(0, safeInt0(t?.stockActual, 0));
+
+          if (
+            !debeMostrarConfiguracion({
+              stockActual,
+              pesoKg: kg,
+              tipoHielo,
+              esMaquila,
+            })
+          ) {
+            return null;
+          }
+
+          return {
+            tipoHielo,
+            stockActual,
+          };
+        })
+        .filter(Boolean) as Array<{
+        tipoHielo: IceType;
+        stockActual: number;
+      }>;
+
+      // Si esta presentación no tiene ningún tipo relevante, no se muestra.
+      if (tipos.length === 0) continue;
+
+      const total = tipos.reduce((sum, item) => sum + safeNum(item.stockActual, 0), 0);
+
+      rows.push({
+        key: codigoBV,
+        codigoBV,
+        nombreBV,
+        nombreLleno,
+        esMaquila,
+        kg,
+        tipos,
+        total,
+      });
     }
 
-    return Array.from(map.entries())
-      .map(([kg, byTipo]) => ({
-        kg,
-        byTipo,
-        total: Object.values(byTipo).reduce((s, v) => s + safeNum(v, 0), 0),
-      }))
-      .sort((a, b) => a.kg - b.kg);
+    return rows.sort((a, b) => {
+      if (a.kg !== b.kg) return a.kg - b.kg;
+      if (a.esMaquila !== b.esMaquila) return a.esMaquila ? 1 : -1;
+      return a.codigoBV.localeCompare(b.codigoBV);
+    });
   }, [stockLlenoPorProductoUI, bolsasVacias]);
 
   /* =========================================================
@@ -790,21 +875,19 @@ export default function InventarioAdminPage() {
       .sort((a: any, b: any) => String(a.codigo).localeCompare(String(b.codigo)));
   }, [barras]);
 
-  const totalBarrasFisicas = useMemo(
-    () => barrasUI.reduce((s: number, b: any) => s + safeNum(b?.cantidad, 0), 0),
-    [barrasUI],
+  // ✅ VISUAL ÚNICAMENTE:
+  // La sección "Barras" toma como referencia el stock actual de tipo BARRA
+  // que ya se muestra en Cámara Fría.
+  // Ejemplo: 298 cuartos de barra = 74.50 barras.
+  // NO modifica Firestore ni la lógica de producción/consumo.
+  const cuartosBarraVisual = useMemo(
+    () => Math.max(0, safeNum(stockLlenoTotalPorTipoUI.BARRA, 0)),
+    [stockLlenoTotalPorTipoUI],
   );
-  const totalCuartosTotales = useMemo(
-    () => barrasUI.reduce((s: number, b: any) => s + safeNum(b?.cuartosTotales, 0), 0),
-    [barrasUI],
-  );
-  const totalCuartosDisponibles = useMemo(
-    () => barrasUI.reduce((s: number, b: any) => s + safeNum(b?.cuartosDisponibles, 0), 0),
-    [barrasUI],
-  );
-  const totalCuartosUsados = useMemo(
-    () => barrasUI.reduce((s: number, b: any) => s + safeNum(b?.cuartosUsados, 0), 0),
-    [barrasUI],
+
+  const barrasCompletasVisual = useMemo(
+    () => cuartosBarraVisual / 4,
+    [cuartosBarraVisual],
   );
 
   const barrasDisponibles = useMemo(() => {
@@ -1168,9 +1251,10 @@ export default function InventarioAdminPage() {
       });
 
       setOkMsg(
-        `✅ Configuración guardada: ${buildNombreBolsaLlena(safeNum(cfgTarget.pesoKg, 0))} · ${
-          ETIQUETAS_TIPO_HIELO[tipoNorm]
-        }`,
+        `✅ Configuración guardada: ${buildNombreBolsaLlena(
+          safeNum(cfgTarget.pesoKg, 0),
+          String((bv as any).nombre ?? cfgTarget.productoNombre ?? ''),
+        )} · ${ETIQUETAS_TIPO_HIELO[tipoNorm]}`,
       );
       setOpenCfg(false);
       await reload();
@@ -1272,7 +1356,13 @@ export default function InventarioAdminPage() {
       if (mermaTarget.tipoProducto === 'BOLSA') {
         const bv = String(mermaTarget.bolsaVaciaCodigo).trim().toUpperCase();
         const th = mermaTarget.tipoHielo as IceType;
-        const nombre = buildNombreBolsaLlena(safeNum(mermaTarget.pesoKg, 0));
+        const bvOrigen = (bolsasVacias ?? []).find(
+          (x: any) => String(x?.codigo ?? '').trim().toUpperCase() === bv,
+        );
+        const nombre = buildNombreBolsaLlena(
+          safeNum(mermaTarget.pesoKg, 0),
+          String((bvOrigen as any)?.nombre ?? ''),
+        );
 
         await MermasService.registrarMerma(
           {
@@ -1356,15 +1446,31 @@ export default function InventarioAdminPage() {
           const min = safeNum(t?.stockMinimo, 0);
           const max = safeNum(t?.stockMaximo, 0);
           const actual = safeNum(t?.stockActual, 0);
-          const ok = actual > min;
 
           const pesoKg = safeNum(p?.pesoKg ?? (bv as any).pesoKg, 0);
-          const nombreNeutral = buildNombreBolsaLlena(pesoKg);
+          const nombreBV = String(p?.productoNombre ?? (bv as any).nombre ?? '').trim();
+          const esMaquila = esBolsaMaquila(nombreBV);
+
+          if (
+            !debeMostrarConfiguracion({
+              stockActual: actual,
+              pesoKg,
+              tipoHielo: tipoNorm,
+              esMaquila,
+            })
+          ) {
+            return null;
+          }
+
+          const ok = actual > min;
+          const nombreNeutral = buildNombreBolsaLlena(pesoKg, nombreBV);
 
           return {
             key: `${codigoBV}-${String(tipoNorm)}`,
             codigo: codigoBV,
             nombre: nombreNeutral,
+            nombreBV,
+            esMaquila,
             pesoKg,
             tipoHielo: tipoNorm,
             actual,
@@ -1549,29 +1655,93 @@ export default function InventarioAdminPage() {
               ))}
             </div>
 
-            {/* Totales por KG */}
+            {/* Inventario por presentación */}
             <div className="bg-gray-900/30 border border-gray-800/50 rounded-2xl p-5">
-              <div className="text-sm text-gray-300 mb-4">Totales por KG (sumando todos los tipos)</div>
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2 mb-5">
+                <div>
+                  <div className="text-sm font-semibold text-gray-200">
+                    Inventario disponible por presentación
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Sólo se muestran existencias reales y las configuraciones operativas que deben permanecer visibles en cero.
+                  </div>
+                </div>
 
-              {camaraPorKg.length === 0 ? (
-                <div className="text-gray-400">Aún no hay stock lleno por KG.</div>
+                <div className="text-xs text-gray-500">
+                  NORMAL y MAQUILA se contabilizan por separado
+                </div>
+              </div>
+
+              {camaraPorPresentacion.length === 0 ? (
+                <div className="rounded-xl border border-gray-800 bg-gray-950/30 p-6 text-center text-gray-400">
+                  No hay presentaciones con stock disponible.
+                </div>
               ) : (
                 <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {camaraPorKg.map((row) => (
+                  {camaraPorPresentacion.map((row) => (
                     <div
-                      key={row.kg}
-                      className="bg-gradient-to-br from-gray-800/30 to-gray-900/20 rounded-2xl p-5 border border-gray-700/50"
+                      key={row.key}
+                      className={`relative overflow-hidden rounded-2xl border p-5 shadow-lg ${
+                        row.esMaquila
+                          ? 'border-amber-700/30 bg-gradient-to-br from-amber-950/20 via-gray-900/30 to-gray-950/20'
+                          : 'border-gray-700/50 bg-gradient-to-br from-gray-800/30 to-gray-900/20'
+                      }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="text-white font-semibold">{row.kg}kg</div>
-                        <div className="text-2xl font-bold text-white tabular-nums">{row.total}</div>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xl font-bold text-white">{row.kg}kg</span>
+
+                            {row.esMaquila ? (
+                              <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/15 px-2.5 py-1 text-[11px] font-bold tracking-wide text-amber-300">
+                                MAQUILA
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full border border-slate-500/20 bg-slate-500/10 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-slate-300">
+                                NORMAL
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-2 truncate text-sm font-medium text-gray-200">
+                            {row.nombreLleno}
+                          </div>
+
+                          <div className="mt-1 text-xs text-gray-500">
+                            Bolsa origen:{' '}
+                            <span className="font-mono text-gray-300">{row.codigoBV}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <div className="text-[11px] uppercase tracking-wide text-gray-500">Total</div>
+                          <div
+                            className={`text-3xl font-bold tabular-nums ${
+                              row.total > 0 ? 'text-white' : 'text-gray-500'
+                            }`}
+                          >
+                            {row.total}
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                        {(['ROLITO', 'FRAPPE', 'GOURMET', 'ENFRIAR', 'BARRA'] as IceType[]).map((t) => (
-                          <div key={t} className="bg-gray-900/30 rounded-lg p-2 flex items-center justify-between">
-                            <span className="text-gray-300">{ETIQUETAS_TIPO_HIELO[t]}</span>
-                            <span className="text-white font-semibold tabular-nums">{safeNum(row.byTipo[t], 0)}</span>
+                      <div className="mt-5 space-y-2">
+                        {row.tipos.map((item) => (
+                          <div
+                            key={`${row.codigoBV}-${item.tipoHielo}`}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-gray-800/60 bg-gray-950/30 px-3 py-2.5"
+                          >
+                            <div className="min-w-0">
+                              <IceTypeChip tipo={item.tipoHielo} />
+                            </div>
+
+                            <div
+                              className={`text-lg font-bold tabular-nums ${
+                                item.stockActual > 0 ? 'text-white' : 'text-gray-500'
+                              }`}
+                            >
+                              {item.stockActual}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1584,24 +1754,33 @@ export default function InventarioAdminPage() {
 
           {/* ================= BARRAS (cuartos) ================= */}
           <section className="mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                <div className="p-2.5 bg-gradient-to-br from-pink-900/40 to-pink-800/30 rounded-lg">
-                  <Database className="h-6 w-6 text-pink-300" />
-                </div>
-                Barras (cuartos)
-              </h2>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                  <div className="p-2.5 bg-gradient-to-br from-pink-900/40 to-pink-800/30 rounded-lg">
+                    <Database className="h-6 w-6 text-pink-300" />
+                  </div>
+                  Barras
+                </h2>
+                <p className="mt-2 text-xs text-gray-500">
+                  Vista equivalente del stock actual de cuartos de barra.
+                </p>
+              </div>
 
-              <div className="bg-gray-900/50 backdrop-blur-sm rounded-lg px-4 py-2 text-sm text-gray-300 space-x-4">
-                <span>
-                  Barras: <span className="font-bold text-white">{totalBarrasFisicas}</span>
-                </span>
-                <span>
-                  Cuartos totales: <span className="font-bold text-white">{totalCuartosTotales}</span>
-                </span>
-                <span>
-                  Disponibles: <span className="font-bold text-emerald-200">{totalCuartosDisponibles}</span>
-                </span>
+              <div className="grid grid-cols-2 gap-3 min-w-[320px]">
+                <div className="rounded-xl border border-purple-800/30 bg-purple-950/20 px-4 py-3">
+                  <div className="text-[11px] text-gray-400">Barras completas</div>
+                  <div className="mt-1 text-2xl font-bold text-white tabular-nums">
+                    {barrasCompletasVisual.toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-emerald-800/30 bg-emerald-950/15 px-4 py-3">
+                  <div className="text-[11px] text-gray-400">Cuartos de barra</div>
+                  <div className="mt-1 text-2xl font-bold text-emerald-300 tabular-nums">
+                    {cuartosBarraVisual}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1613,10 +1792,6 @@ export default function InventarioAdminPage() {
                 </div>
               ) : (
                 barrasUI.map((b: any) => {
-                  const disp = safeNum(b.cuartosDisponibles, 0);
-                  const usados = safeNum(b.cuartosUsados, 0);
-                  const tot = safeNum(b.cuartosTotales, 0);
-                  const cap = capCuartosBarra(b);
 
                   return (
                     <div
@@ -1670,34 +1845,19 @@ export default function InventarioAdminPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-4 gap-3">
-                        <div className="bg-gray-900/30 rounded-lg p-3 text-center">
-                          <div className="text-[11px] text-gray-400">Barras</div>
-                          <div className="text-lg font-bold text-white tabular-nums">{safeNum(b.cantidad, 0)}</div>
-                        </div>
-                        <div className="bg-gray-900/30 rounded-lg p-3 text-center">
-                          <div className="text-[11px] text-gray-400">Cuartos totales</div>
-                          <div className="text-lg font-bold text-white tabular-nums">{tot}</div>
-                        </div>
-                        <div className="bg-gray-900/30 rounded-lg p-3 text-center">
-                          <div className="text-[11px] text-gray-400">Disponibles</div>
-                          <div className="text-lg font-bold text-emerald-300 tabular-nums">{disp}</div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 space-y-2">
-                        <div className="flex items-center justify-between text-xs text-gray-400">
-                          <span>
-                            Cap: {cap} · Disponibles: {disp}
-                          </span>
-                          <span>Disponible: {Math.round(pct(disp, cap))}%</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-xl border border-purple-800/30 bg-purple-950/20 p-4">
+                          <div className="text-[11px] text-gray-400">Barras completas</div>
+                          <div className="mt-1 text-3xl font-bold text-white tabular-nums">
+                            {barrasCompletasVisual.toFixed(2)}
+                          </div>
                         </div>
 
-                        <div className="h-2.5 bg-gray-800/50 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-pink-500 to-pink-300 transition-all duration-700"
-                            style={{ width: `${pct(disp, cap)}%` }}
-                          />
+                        <div className="rounded-xl border border-emerald-800/30 bg-emerald-950/15 p-4">
+                          <div className="text-[11px] text-gray-400">Cuartos de barra</div>
+                          <div className="mt-1 text-3xl font-bold text-emerald-300 tabular-nums">
+                            {cuartosBarraVisual}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1736,9 +1896,14 @@ export default function InventarioAdminPage() {
                   >
                     <div className="flex items-start justify-between gap-3 mb-4">
                       <div>
-                        <div className="flex items-center gap-2 mb-2">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
                           <span className="font-semibold text-white text-lg">{safeNum(c.pesoKg, 0)}kg</span>
                           <IceTypeChip tipo={c.tipoHielo} />
+                          {c.esMaquila ? (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                              MAQUILA
+                            </span>
+                          ) : null}
                         </div>
                         <p className="text-white font-medium">{c.nombre}</p>
                         <p className="text-xs text-gray-400 mt-1">BV: {c.codigo}</p>
@@ -1864,7 +2029,14 @@ export default function InventarioAdminPage() {
                           <Package className="h-5 w-5 text-cyan-300" />
                         </div>
                         <div>
-                          <p className="font-semibold text-white">{String(bv.nombre ?? 'Bolsa vacía')}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-white">{String(bv.nombre ?? 'Bolsa vacía')}</p>
+                            {esBolsaMaquila(bv.nombre) ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                MAQUILA
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="text-xs text-gray-400">Código: {String(bv.codigo ?? '—')}</p>
                         </div>
                       </div>
@@ -2112,6 +2284,15 @@ export default function InventarioAdminPage() {
               </div>
               <div className="mt-2 text-sm text-cyan-200/80">
                 Vacías disponibles: <b>{Math.floor(Number((fillTarget as any).cantidad ?? 0))}</b>
+              </div>
+              <div className="mt-2 text-xs text-cyan-100/70">
+                Se registrará como:{' '}
+                <b className="text-cyan-100">
+                  {buildNombreBolsaLlena(
+                    safeNum((fillTarget as any).pesoKg, 0),
+                    String((fillTarget as any).nombre ?? ''),
+                  )}
+                </b>
               </div>
             </div>
 

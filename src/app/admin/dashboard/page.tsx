@@ -250,7 +250,7 @@ export default function AdminDashboardPage() {
 
   const handleLogout = async () => {
     await logout();
-    router.replace('/admin/login');
+    router.replace('/login');
   };
 
   // ✅ navegación PRO: prefetch solo hover/focus (no global)

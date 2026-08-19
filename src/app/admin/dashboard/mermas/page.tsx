@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 // app/admin/dashboard/mermas/page.tsx
@@ -208,7 +209,45 @@ const getCodigo = (m: Movimiento, kind?: MermaKind) => {
   return pc || bv || '—';
 };
 
-const getNombre = (m: Movimiento) => String(m.productoNombre ?? '').trim() || '—';
+const esMaquila = (nombre: unknown) =>
+  /maquila/i.test(String(nombre ?? '').trim());
+
+const extractKgFromText = (value: unknown): number | null => {
+  const match = String(value ?? '').match(/(\d+(?:\.\d+)?)\s*kg/i);
+  if (!match) return null;
+
+  const kg = Number(match[1]);
+  return Number.isFinite(kg) ? kg : null;
+};
+
+const buildNombreBolsaLlena = (nombreBase: unknown) => {
+  const nombre = String(nombreBase ?? '').trim();
+  const kg = extractKgFromText(nombre);
+  const maquila = esMaquila(nombre);
+
+  if (kg != null && kg > 0) {
+    return maquila ? `Bolsa llena ${kg}kg MAQUILA` : `Bolsa llena ${kg}kg`;
+  }
+
+  return nombre || 'Bolsa llena';
+};
+
+const getNombre = (m: Movimiento) => {
+  const raw = String(m.productoNombre ?? '').trim() || '—';
+  const kind = classifyMermaKind(m);
+
+  // Sólo las mermas de producto lleno se normalizan como "Bolsa llena".
+  if (kind === 'BOLSA') return buildNombreBolsaLlena(raw);
+
+  return raw;
+};
+
+const getEsMaquila = (m: Movimiento) => {
+  if (esMaquila(m.productoNombre)) return true;
+
+  const items = Array.isArray(m.items) ? m.items : [];
+  return items.some((it) => esMaquila((it as any)?.productoNombre));
+};
 
 const getQty = (m: Movimiento) => safeIntAbs(m.cantidad ?? m.deltaPrincipal ?? 0);
 
@@ -387,6 +426,8 @@ export default function MermasPage() {
       const kind = classifyMermaKind(m);
       const codigo = getCodigo(m, kind).toLowerCase();
       const nombre = getNombre(m).toLowerCase();
+      const nombreOriginal = String(m.productoNombre ?? '').toLowerCase();
+      const maquila = getEsMaquila(m) ? 'maquila' : '';
       const por = String(m.creadoPor ?? '').toLowerCase();
       const org = String(m.origen ?? '').toLowerCase();
 
@@ -400,6 +441,8 @@ export default function MermasPage() {
         kind.toLowerCase().includes(t) ||
         codigo.includes(t) ||
         nombre.includes(t) ||
+        nombreOriginal.includes(t) ||
+        maquila.includes(t) ||
         por.includes(t) ||
         org.includes(t) ||
         thLabel.includes(t) ||
@@ -434,79 +477,110 @@ export default function MermasPage() {
     const kind = classifyMermaKind(selected);
     const codigo = getCodigo(selected, kind);
     const nombre = getNombre(selected);
-    return `${kind === 'BARRA' ? 'MERMA BARRA' : kind === 'BV' ? 'MERMA BV' : 'MERMA BOLSA'} · ${nombre} · ${codigo}`;
+    const maquila = getEsMaquila(selected);
+    return `${kind === 'BARRA' ? 'MERMA BARRA' : kind === 'BV' ? 'MERMA BV' : 'MERMA BOLSA'} · ${nombre}${maquila ? ' · MAQUILA' : ''} · ${codigo}`;
   }, [selected]);
 
   return (
     <div className="min-h-screen w-full px-6 py-6 bg-gradient-to-br from-gray-900 via-gray-950 to-black">
       <div className="mx-auto max-w-6xl">
         {/* HEADER */}
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="rounded-2xl bg-gradient-to-br from-rose-500/15 via-violet-500/10 to-cyan-500/10 p-3 ring-1 ring-white/10">
-              <PackageMinus className="h-6 w-6 text-white/90" />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold text-white flex items-center gap-2">Mermas</h1>
-              <p className="text-sm text-white/50">Historial de Mermas</p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
+        <div className="mb-8 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+          <div className="flex items-start gap-4">
             <button
               type="button"
               onClick={() => router.push('/admin/dashboard')}
-              className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-4 py-2 text-sm text-white/80 ring-1 ring-white/10 hover:bg-white/10"
+              className="p-3 bg-gradient-to-br from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 rounded-xl text-gray-400 hover:text-white transition-all duration-300 hover:scale-105 mt-1"
+              title="Volver al Dashboard"
             >
-              <ArrowLeft className="h-4 w-4" />
-              Dashboard
+              <ArrowLeft className="h-5 w-5" />
             </button>
 
-            <button
-              type="button"
-              onClick={() => router.push('/admin/dashboard/inventario')}
-              className="inline-flex items-center gap-2 rounded-xl bg-white/5 px-4 py-2 text-sm text-white/80 ring-1 ring-white/10 hover:bg-white/10"
-            >
-              <Warehouse className="h-4 w-4" />
-              Inventario
-            </button>
+            <div className="p-3 rounded-xl bg-gradient-to-r from-rose-900/60 via-purple-800/60 to-cyan-900/60 backdrop-blur-sm border border-rose-700/30 shadow-lg">
+              <PackageMinus className="h-10 w-10 text-rose-300" />
+            </div>
+
+            <div>
+              <h1 className="text-3xl font-bold text-white bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">
+                Mermas de Inventario
+              </h1>
+              <p className="text-gray-400 text-sm mt-2 flex items-center gap-2">
+                <Info className="h-4 w-4" />
+                Historial de bolsas llenas, bolsas vacías y barras
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => router.push('/admin/dashboard/inventario')}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-gray-800 to-gray-900 text-gray-300 rounded-xl font-medium hover:from-gray-700 hover:to-gray-800 hover:text-white transition-all duration-300"
+          >
+            <Warehouse className="h-5 w-5" />
+            Inventario
+          </button>
+        </div>
+
+        {/* RESUMEN */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <div className="rounded-xl p-4 border border-gray-800/50 bg-gradient-to-br from-slate-900/50 to-slate-800/30 shadow-lg">
+            <div className="text-xs text-gray-400">Registros</div>
+            <div className="mt-1 text-2xl font-bold text-white tabular-nums">{totals.rows}</div>
+          </div>
+
+          <div className="rounded-xl p-4 border border-rose-800/30 bg-gradient-to-br from-rose-900/35 to-rose-800/20 shadow-lg">
+            <div className="text-xs text-rose-300">Total mermado</div>
+            <div className="mt-1 text-2xl font-bold text-rose-200 tabular-nums">-{totals.total}</div>
+          </div>
+
+          <div className="rounded-xl p-4 border border-orange-800/30 bg-gradient-to-br from-orange-900/30 to-orange-800/15 shadow-lg">
+            <div className="text-xs text-orange-300">Bolsas llenas</div>
+            <div className="mt-1 text-2xl font-bold text-orange-200 tabular-nums">-{totals.bolsa}</div>
+          </div>
+
+          <div className="rounded-xl p-4 border border-cyan-800/30 bg-gradient-to-br from-cyan-900/30 to-cyan-800/15 shadow-lg">
+            <div className="text-xs text-cyan-300">Bolsas vacías</div>
+            <div className="mt-1 text-2xl font-bold text-cyan-200 tabular-nums">-{totals.bv}</div>
+          </div>
+
+          <div className="rounded-xl p-4 border border-violet-800/30 bg-gradient-to-br from-violet-900/30 to-violet-800/15 shadow-lg">
+            <div className="text-xs text-violet-300">Barra / cuartos</div>
+            <div className="mt-1 text-2xl font-bold text-violet-200 tabular-nums">-{totals.barra}</div>
           </div>
         </div>
 
-        {/* SEARCH + TOTALS */}
-        <div className="mb-5 grid grid-cols-1 gap-3">
-          <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-2 text-sm text-white/70">
-              <Badge kind="slate">
-                <Layers className="h-3.5 w-3.5" />
-                registros: <span className="font-semibold tabular-nums">{totals.rows}</span>
-              </Badge>
-
-              <Badge kind="slate">
-                total restado: <span className="font-semibold tabular-nums">-{totals.total}</span>
-              </Badge>
-
-              <Badge kind="rose">bolsa: -{totals.bolsa}</Badge>
-              <Badge kind="cyan">BV: -{totals.bv}</Badge>
-              <Badge kind="violet">barra: -{totals.barra}</Badge>
+        {/* BUSCADOR */}
+        <div className="mb-6 bg-gradient-to-br from-gray-800/30 to-gray-900/20 backdrop-blur-sm rounded-2xl border border-gray-700/50 shadow-xl p-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <Search className="h-5 w-5 text-purple-300" />
+                Buscar en historial
+              </h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Código, producto, tipo de hielo, maquila, usuario u origen.
+              </p>
             </div>
 
-            <div className="relative w-full sm:w-[420px]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+            <div className="relative w-full md:w-[440px]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
               <input
                 value={qText}
                 onChange={(e) => setQText(e.target.value)}
-                placeholder="Buscar código / tipo hielo / usuario / origen…"
-                className="w-full rounded-xl bg-black/30 py-2.5 pl-9 pr-3 text-sm ring-1 ring-white/10 outline-none focus:ring-white/20 text-white"
+                placeholder="Buscar merma..."
+                className="w-full pl-10 pr-4 py-3 bg-gray-900/70 border border-gray-700/50 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/50 backdrop-blur-sm"
               />
             </div>
           </div>
         </div>
 
         {/* LIST */}
-        <section className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-white">Historial</h2>
+        <section className="bg-gradient-to-br from-gray-800/30 to-gray-900/20 backdrop-blur-sm rounded-2xl border border-gray-700/50 shadow-xl overflow-hidden">
+          <div className="px-6 py-5 border-b border-gray-700/50 bg-gradient-to-r from-gray-900/60 to-gray-800/40 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-white">Historial de Mermas</h2>
+              <p className="mt-1 text-sm text-gray-400">Movimientos que redujeron inventario</p>
+            </div>
             {loading ? (
               <div className="flex items-center gap-2 text-sm text-white/60">
                 <Loader2 className="h-4 w-4 animate-spin" /> Cargando…
@@ -518,6 +592,7 @@ export default function MermasPage() {
             )}
           </div>
 
+          <div className="p-6">
           {!loading && filtered.length === 0 ? (
             <div className="rounded-xl bg-black/20 p-4 text-sm text-white/60 ring-1 ring-white/10">
               Sin mermas registradas.
@@ -531,6 +606,7 @@ export default function MermasPage() {
                 const codigo = getCodigo(m, kind);
                 const nombre = getNombre(m);
                 const qtyAbs = getQty(m);
+                const isMaquila = getEsMaquila(m);
 
                 const th = kind === 'BOLSA' ? getTipoHieloMerma(m) : null;
                 const thLabel = th ? ETIQUETAS_TIPO_HIELO[th] : '';
@@ -545,7 +621,11 @@ export default function MermasPage() {
                 return (
                   <div
                     key={m.id}
-                    className="rounded-2xl bg-gradient-to-br from-black/25 to-black/10 p-4 ring-1 ring-white/10 hover:ring-white/20 transition"
+                    className={`rounded-2xl p-5 border shadow-lg transition-all duration-300 hover:-translate-y-0.5 ${
+                      isMaquila
+                        ? 'bg-gradient-to-br from-amber-950/20 to-gray-900/30 border-amber-700/30 hover:border-amber-600/40'
+                        : 'bg-gradient-to-br from-gray-900/60 to-gray-900/30 border-gray-700/40 hover:border-gray-600/60'
+                    }`}
                   >
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
@@ -554,6 +634,12 @@ export default function MermasPage() {
                             {titleIcon}
                             {title}
                           </Badge>
+
+                          {isMaquila ? (
+                            <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/15 px-3 py-1 text-[10px] font-black tracking-[0.12em] text-amber-300">
+                              MAQUILA
+                            </span>
+                          ) : null}
 
                           <Badge kind="amber">
                             <Clock className="h-3.5 w-3.5" />
@@ -603,7 +689,9 @@ export default function MermasPage() {
 
                         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                           <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
-                            <div className="text-xs text-white/50">Producto</div>
+                            <div className="text-xs text-white/50">
+                              {kind === 'BOLSA' ? 'Producto lleno' : kind === 'BV' ? 'Bolsa vacía' : 'Barra'}
+                            </div>
                             <div className="mt-1 text-sm font-semibold text-white break-words">{nombre}</div>
 
                             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/55">
@@ -646,6 +734,7 @@ export default function MermasPage() {
               </div>
             </div>
           ) : null}
+          </div>
         </section>
       </div>
 
@@ -668,6 +757,7 @@ export default function MermasPage() {
 
             const codigo = getCodigo(selected, kind);
             const nombre = getNombre(selected);
+            const isMaquila = getEsMaquila(selected);
 
             // tipo de hielo (solo bolsa llena)
             const th = kind === 'BOLSA' ? getTipoHieloMerma(selected) : null;
@@ -685,6 +775,12 @@ export default function MermasPage() {
                     {kind === 'BARRA' ? 'BARRA (cuartos)' : kind === 'BV' ? 'BOLSA VACÍA' : 'BOLSA LLENA'}
                   </Badge>
 
+                  {isMaquila ? (
+                    <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/15 px-3 py-1 text-[10px] font-black tracking-[0.12em] text-amber-300">
+                      MAQUILA
+                    </span>
+                  ) : null}
+
                   <Badge kind="amber">
                     <Clock className="h-3.5 w-3.5" />
                     {fecha || '—'}
@@ -699,7 +795,9 @@ export default function MermasPage() {
                   </div>
 
                   <div className="rounded-2xl bg-white/5 p-4 ring-1 ring-white/10 md:col-span-2">
-                    <div className="text-xs text-white/50">Producto</div>
+                    <div className="text-xs text-white/50">
+                      {kind === 'BOLSA' ? 'Producto lleno' : kind === 'BV' ? 'Bolsa vacía' : 'Barra'}
+                    </div>
                     <div className="mt-1 text-sm font-semibold text-white break-words">{nombre}</div>
 
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/55">

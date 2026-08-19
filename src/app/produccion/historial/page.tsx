@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/produccion/historial/page.tsx  ✅ PRODUCCIÓN: Historial por usuario (llenados + salidas + devoluciones)
 // ✅ FIX: ahora también muestra SALIDA legacy ("SALIDA", "VENTA...") y LLENADO/DEVOLUCIÓN legacy
 // ✅ PLUS: si el movimiento es batch (SALIDA_BOLSA con items[]), muestra "Salida (N items)" y suma total
@@ -10,7 +12,6 @@ import { useRouter } from 'next/navigation';
 
 import { useAuthContext } from '@/context/AuthContext';
 import { db } from '@/lib/firebase/config.client';
-
 
 import {
   collection,
@@ -38,6 +39,7 @@ import {
   Truck,
   ClipboardList,
   X,
+  Snowflake,
 } from 'lucide-react';
 
 /**
@@ -129,6 +131,48 @@ function formatDT(d: Date) {
   });
 }
 
+const esMaquila = (nombre: unknown) =>
+  /maquila/i.test(String(nombre ?? '').trim());
+
+const extractKg = (nombre: unknown): number | null => {
+  const match = String(nombre ?? '').match(/(\d+(?:\.\d+)?)\s*kg/i);
+  if (!match) return null;
+  const kg = Number(match[1]);
+  return Number.isFinite(kg) ? kg : null;
+};
+
+const buildNombreLlenoDesdeMovimiento = (m: {
+  productoNombre?: unknown;
+  productoCodigo?: unknown;
+  tipoHielo?: unknown;
+}) => {
+  const nombre = String(m?.productoNombre ?? '').trim();
+  const kg = extractKg(nombre);
+  const maquila = esMaquila(nombre);
+
+  if (kg != null && kg > 0) {
+    return maquila ? `Bolsa llena ${kg}kg MAQUILA` : `Bolsa llena ${kg}kg`;
+  }
+
+  return nombre || String(m?.productoCodigo ?? 'Producto');
+};
+
+const buildNombreLlenoDesdeItem = (it: {
+  productoNombre?: unknown;
+  productoCodigo?: unknown;
+  bolsaVaciaCodigo?: unknown;
+}) => {
+  const nombre = String(it?.productoNombre ?? '').trim();
+  const kg = extractKg(nombre);
+  const maquila = esMaquila(nombre);
+
+  if (kg != null && kg > 0) {
+    return maquila ? `Bolsa llena ${kg}kg MAQUILA` : `Bolsa llena ${kg}kg`;
+  }
+
+  return nombre || String(it?.productoCodigo ?? it?.bolsaVaciaCodigo ?? 'Bolsa llena');
+};
+
 function metaTipo(tipo?: string) {
   const t = String(tipo ?? '').toUpperCase().trim();
 
@@ -136,7 +180,7 @@ function metaTipo(tipo?: string) {
     return {
       label: 'Llenado',
       icon: Factory,
-      pill: 'bg-cyan-50 text-cyan-800 border-cyan-200',
+      pill: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
       iconBox: 'bg-gradient-to-br from-cyan-500 to-cyan-600',
     };
   }
@@ -144,7 +188,7 @@ function metaTipo(tipo?: string) {
     return {
       label: 'Devolución',
       icon: Undo2,
-      pill: 'bg-amber-50 text-amber-800 border-amber-200',
+      pill: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
       iconBox: 'bg-gradient-to-br from-amber-500 to-amber-600',
     };
   }
@@ -152,7 +196,7 @@ function metaTipo(tipo?: string) {
     return {
       label: 'Salida',
       icon: Truck,
-      pill: 'bg-orange-50 text-orange-800 border-orange-200',
+      pill: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
       iconBox: 'bg-gradient-to-br from-orange-500 to-orange-600',
     };
   }
@@ -160,7 +204,7 @@ function metaTipo(tipo?: string) {
   return {
     label: t || 'Movimiento',
     icon: ClipboardList,
-    pill: 'bg-gray-50 text-gray-800 border-gray-200',
+    pill: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
     iconBox: 'bg-gradient-to-br from-slate-500 to-slate-600',
   };
 }
@@ -285,7 +329,8 @@ export default function ProduccionHistorialPage() {
       const n = m.batchCount ?? m.items.length;
       return `Salida (${n} item${n === 1 ? '' : 's'})`;
     }
-    return m.productoNombre ?? 'Producto';
+
+    return buildNombreLlenoDesdeMovimiento(m);
   };
 
   const displayTipoHielo = (m: MovRow): IceType | undefined => {
@@ -324,6 +369,7 @@ export default function ProduccionHistorialPage() {
                 [
                   it?.productoCodigo,
                   it?.productoNombre,
+                  buildNombreLlenoDesdeItem(it),
                   it?.bolsaVaciaCodigo,
                   it?.tipoHielo,
                   it?.cantidad,
@@ -338,6 +384,7 @@ export default function ProduccionHistorialPage() {
         r.codigo,
         r.productoCodigo,
         r.productoNombre,
+        buildNombreLlenoDesdeMovimiento(r),
         r.tipoHielo,
         r.motivo,
         r.destinatario,
@@ -359,25 +406,25 @@ export default function ProduccionHistorialPage() {
   if (loading || !productionSession) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-cyan-50 to-blue-50 text-gray-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950/30">
       <div className="container mx-auto px-4 py-8 max-w-6xl">
-        {/* Header Premium (mismo feeling que dashboard) */}
-        <div className="bg-gradient-to-r from-white to-cyan-50 rounded-3xl border border-cyan-200/50 shadow-xl p-6 mb-6">
+        {/* Header Premium */}
+        <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-6 mb-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => router.back()}
-                className="p-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:from-cyan-600 hover:to-blue-600 shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5"
+                className="p-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-600 hover:to-blue-700 shadow-lg shadow-cyan-500/20 transition-all duration-300 hover:-translate-y-0.5"
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
 
               <div>
                 <div className="flex items-center gap-2">
-                  <ClipboardList className="h-5 w-5 text-cyan-600" />
-                  <h1 className="text-2xl font-bold text-gray-900">Historial</h1>
+                  <Snowflake className="h-5 w-5 text-cyan-300" />
+                  <h1 className="text-2xl font-bold text-white tracking-tight">Historial</h1>
                 </div>
-                <p className="text-gray-600 mt-1 text-sm">
+                <p className="text-slate-400 mt-1 text-sm">
                   Solo tus movimientos: llenados, salidas y devoluciones.
                 </p>
               </div>
@@ -385,21 +432,21 @@ export default function ProduccionHistorialPage() {
 
             <div className="flex items-center gap-4">
               <div className="text-right">
-                <p className="text-sm text-gray-600">Operario</p>
-                <p className="text-lg font-bold text-cyan-700">{userNombre}</p>
-                <p className="text-xs text-gray-500 font-mono">{userCodigo}</p>
+                <p className="text-sm text-slate-400">Operario</p>
+                <p className="text-lg font-bold text-cyan-300">{userNombre}</p>
+                <p className="text-xs text-slate-500 font-mono">{userCodigo}</p>
               </div>
-              <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg">
-                <User className="w-5 h-5 text-white" />
+              <div className="w-12 h-12 bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-2xl flex items-center justify-center border border-cyan-500/30 shadow-lg">
+                <User className="w-5 h-5 text-cyan-300" />
               </div>
             </div>
           </div>
 
           <div className="mt-5 flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-              <CalendarDays className="h-4 w-4 text-cyan-600" />
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              <CalendarDays className="h-4 w-4 text-cyan-400" />
               Desde:{' '}
-              <span className="font-semibold text-gray-900">
+              <span className="font-semibold text-white">
                 {startDate.toLocaleDateString('es-MX')}
               </span>
             </div>
@@ -410,21 +457,21 @@ export default function ProduccionHistorialPage() {
                 setLoadingRows(true);
                 setTimeout(() => setLoadingRows(false), 250);
               }}
-              className="inline-flex items-center gap-2 rounded-2xl border border-cyan-200 bg-white px-4 py-2 text-sm hover:bg-cyan-50 shadow-sm"
+              className="inline-flex items-center gap-2 rounded-2xl border border-slate-700/50 bg-slate-800/50 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-all shadow-sm"
             >
-              <RefreshCw className="h-4 w-4 text-cyan-700" />
+              <RefreshCw className="h-4 w-4 text-cyan-400" />
               Refrescar
             </button>
           </div>
         </div>
 
-        {/* Filtros (cards claras) */}
+        {/* Filtros */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
           {/* Search */}
-          <div className="lg:col-span-2 bg-white rounded-3xl border border-cyan-200/50 shadow-xl p-4">
+          <div className="lg:col-span-2 bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-4">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-2xl border border-cyan-200 bg-cyan-50 flex items-center justify-center">
-                <Search className="h-4 w-4 text-cyan-700" />
+              <div className="h-10 w-10 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 flex items-center justify-center">
+                <Search className="h-4 w-4 text-cyan-400" />
               </div>
 
               <div className="flex-1">
@@ -432,16 +479,16 @@ export default function ProduccionHistorialPage() {
                   value={qText}
                   onChange={(e) => setQText(e.target.value)}
                   placeholder="Buscar por producto, tipo de hielo, motivo, destinatario, máquina…"
-                  className="w-full rounded-2xl border border-cyan-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-200 focus:border-cyan-300 transition"
+                  className="w-full rounded-2xl border border-slate-700/50 bg-slate-800/50 text-white placeholder:text-slate-500 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40 transition"
                 />
               </div>
 
               {qText.trim() ? (
                 <button
                   onClick={clearSearch}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-cyan-200 bg-white px-4 py-3 text-sm hover:bg-cyan-50 transition"
+                  className="inline-flex items-center gap-2 rounded-2xl border border-slate-700/50 bg-slate-800/50 px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition"
                 >
-                  <X className="h-4 w-4 text-gray-700" />
+                  <X className="h-4 w-4" />
                   Limpiar
                 </button>
               ) : null}
@@ -449,9 +496,9 @@ export default function ProduccionHistorialPage() {
           </div>
 
           {/* Selects */}
-          <div className="bg-white rounded-3xl border border-cyan-200/50 shadow-xl p-4">
-            <div className="flex items-center gap-2 mb-3 text-sm text-gray-700">
-              <Filter className="h-4 w-4 text-cyan-700" />
+          <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 p-4">
+            <div className="flex items-center gap-2 mb-3 text-sm text-slate-400">
+              <Filter className="h-4 w-4 text-cyan-400" />
               Filtros
             </div>
 
@@ -459,7 +506,7 @@ export default function ProduccionHistorialPage() {
               <select
                 value={tipoFiltro}
                 onChange={(e) => setTipoFiltro(e.target.value as any)}
-                className="rounded-2xl border border-cyan-200 bg-white px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-200"
+                className="rounded-2xl border border-slate-700/50 bg-slate-800/50 text-white px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40"
               >
                 <option value="TODOS">Todos</option>
                 <option value="LLENADO_BOLSA">Llenados</option>
@@ -470,7 +517,7 @@ export default function ProduccionHistorialPage() {
               <select
                 value={rango}
                 onChange={(e) => setRango(e.target.value as any)}
-                className="rounded-2xl border border-cyan-200 bg-white px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-200"
+                className="rounded-2xl border border-slate-700/50 bg-slate-800/50 text-white px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500/40"
               >
                 {RANGOS.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -480,10 +527,10 @@ export default function ProduccionHistorialPage() {
               </select>
             </div>
 
-            <div className="mt-3 flex items-center gap-2 text-xs text-gray-600">
-              <CalendarDays className="h-4 w-4 text-cyan-700" />
+            <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
+              <CalendarDays className="h-4 w-4 text-cyan-400" />
               Rango:{' '}
-              <span className="font-semibold text-gray-900">
+              <span className="font-semibold text-white">
                 {RANGOS.find((x) => x.id === rango)?.label ?? '—'}
               </span>
             </div>
@@ -491,28 +538,28 @@ export default function ProduccionHistorialPage() {
         </div>
 
         {/* Tabla / Lista */}
-        <div className="bg-white rounded-3xl border border-cyan-200/50 shadow-xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-cyan-200/40 bg-gradient-to-r from-white to-cyan-50">
-            <div className="text-sm text-gray-700">
+        <div className="bg-slate-900/70 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl shadow-slate-950/50 overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700/50 bg-gradient-to-r from-slate-900 via-cyan-900/30 to-slate-900">
+            <div className="text-sm text-slate-400">
               {loadingRows ? 'Cargando…' : `${filtered.length} movimiento(s)`}
             </div>
           </div>
 
           {loadingRows ? (
-            <div className="p-12 flex items-center justify-center text-gray-700">
-              <Loader2 className="h-5 w-5 animate-spin mr-2 text-cyan-700" />
+            <div className="p-12 flex items-center justify-center text-slate-400">
+              <Loader2 className="h-5 w-5 animate-spin mr-2 text-cyan-400" />
               Cargando historial…
             </div>
           ) : error ? (
             <div className="p-6">
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-300">
                 {error}
               </div>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="p-10 text-gray-600">No hay movimientos con esos filtros.</div>
+            <div className="p-10 text-slate-400">No hay movimientos con esos filtros.</div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-slate-700/50">
               {filtered.map((m) => {
                 const meta = metaTipo(m.tipo);
                 const Icon = meta.icon;
@@ -524,9 +571,12 @@ export default function ProduccionHistorialPage() {
                 const qtyAbs = Math.abs(Number(qty) || 0);
 
                 const title = displayTitle(m);
+                const rowEsMaquila =
+                  esMaquila(m.productoNombre) ||
+                  (Array.isArray(m.items) && m.items.some((it) => esMaquila(it?.productoNombre)));
 
                 return (
-                  <div key={m.id} className="px-5 py-5 hover:bg-cyan-50/40 transition">
+                  <div key={m.id} className="px-5 py-5 hover:bg-slate-800/30 transition">
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex items-start gap-4">
                         <div
@@ -541,95 +591,106 @@ export default function ProduccionHistorialPage() {
                               {meta.label}
                             </span>
 
-                            <span className="text-gray-900 font-bold truncate max-w-[520px]">
+                            <span className="text-white font-bold truncate max-w-[520px]">
                               {title}
                             </span>
 
+                            {rowEsMaquila ? (
+                              <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[10px] font-black tracking-[0.12em] text-amber-400">
+                                MAQUILA
+                              </span>
+                            ) : null}
+
                             {tipoH ? (
-                              <span className="text-xs text-gray-600">
+                              <span className="text-xs text-slate-400">
                                 • {ETIQUETAS_TIPO_HIELO[tipoH] ?? String(tipoH)}
                               </span>
                             ) : null}
                           </div>
 
-                          <div className="mt-1 text-sm text-gray-600">
-                            <span className="font-mono text-gray-800">{m.productoCodigo ?? '—'}</span>
-                            <span className="text-gray-300"> • </span>
+                          <div className="mt-1 text-sm text-slate-400">
+                            <span className="font-mono text-slate-300">{m.productoCodigo ?? '—'}</span>
+                            <span className="text-slate-600"> • </span>
                             <span>{formatDT(f)}</span>
 
                             {m.maquina ? (
                               <>
-                                <span className="text-gray-300"> • </span>
+                                <span className="text-slate-600"> • </span>
                                 <span>Máquina: {String(m.maquina)}</span>
                               </>
                             ) : null}
 
                             {m.ubicacion ? (
                               <>
-                                <span className="text-gray-300"> • </span>
+                                <span className="text-slate-600"> • </span>
                                 <span>Ubic: {String(m.ubicacion)}</span>
                               </>
                             ) : null}
                           </div>
 
                           {(m.destinatario || m.clienteNombre || m.motivo || m.observaciones) ? (
-                            <div className="mt-3 text-sm text-gray-700 space-y-1">
+                            <div className="mt-3 text-sm text-slate-300 space-y-1">
                               {m.destinatario ? (
                                 <div>
                                   Destino:{' '}
-                                  <span className="font-semibold text-gray-900">{m.destinatario}</span>
+                                  <span className="font-semibold text-white">{m.destinatario}</span>
                                 </div>
                               ) : null}
                               {m.clienteNombre ? (
                                 <div>
                                   Cliente:{' '}
-                                  <span className="font-semibold text-gray-900">{m.clienteNombre}</span>
+                                  <span className="font-semibold text-white">{m.clienteNombre}</span>
                                 </div>
                               ) : null}
                               {m.motivo ? (
                                 <div>
                                   Motivo:{' '}
-                                  <span className="font-semibold text-gray-900">{m.motivo}</span>
+                                  <span className="font-semibold text-white">{m.motivo}</span>
                                 </div>
                               ) : null}
                               {m.observaciones ? (
-                                <div className="text-gray-600">{m.observaciones}</div>
+                                <div className="text-slate-400">{m.observaciones}</div>
                               ) : null}
                             </div>
                           ) : null}
 
                           {/* Batch items preview (solo para salida batch) */}
                           {getIsSalida(m.tipo) && Array.isArray(m.items) && m.items.length ? (
-                            <div className="mt-3 rounded-2xl border border-orange-200 bg-orange-50/40 p-3">
-                              <div className="text-xs font-semibold text-orange-800 mb-2">
+                            <div className="mt-3 rounded-2xl border border-orange-500/30 bg-orange-500/10 p-3">
+                              <div className="text-xs font-semibold text-orange-300 mb-2">
                                 Detalle de items ({m.items.length})
                               </div>
                               <div className="space-y-1">
                                 {m.items.slice(0, 6).map((it, idx) => (
-                                  <div key={idx} className="text-xs text-gray-700 flex flex-wrap gap-2">
-                                    <span className="font-mono text-gray-800">
+                                  <div key={idx} className="text-xs text-slate-300 flex flex-wrap gap-2">
+                                    <span className="font-mono text-slate-400">
                                       {it.productoCodigo ?? it.bolsaVaciaCodigo ?? '—'}
                                     </span>
-                                    <span className="text-gray-400">•</span>
-                                    <span className="font-semibold text-gray-900">
-                                      {it.productoNombre ?? 'Bolsa llena'}
+                                    <span className="text-slate-600">•</span>
+                                    <span className="font-semibold text-white">
+                                      {buildNombreLlenoDesdeItem(it)}
                                     </span>
+                                    {esMaquila(it.productoNombre) ? (
+                                      <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[9px] font-black tracking-[0.1em] text-amber-400">
+                                        MAQUILA
+                                      </span>
+                                    ) : null}
                                     {it.tipoHielo ? (
                                       <>
-                                        <span className="text-gray-400">•</span>
-                                        <span className="text-gray-700">
+                                        <span className="text-slate-600">•</span>
+                                        <span className="text-slate-400">
                                           {String(it.tipoHielo)}
                                         </span>
                                       </>
                                     ) : null}
-                                    <span className="text-gray-400">•</span>
-                                    <span className="text-gray-900">
+                                    <span className="text-slate-600">•</span>
+                                    <span className="text-rose-400">
                                       -{Math.abs(Number(it.cantidad ?? 0))}
                                     </span>
                                   </div>
                                 ))}
                                 {m.items.length > 6 ? (
-                                  <div className="text-xs text-gray-600">… y {m.items.length - 6} más</div>
+                                  <div className="text-xs text-slate-500">… y {m.items.length - 6} más</div>
                                 ) : null}
                               </div>
                             </div>
@@ -641,7 +702,7 @@ export default function ProduccionHistorialPage() {
                         <div
                           className={[
                             'text-lg font-bold',
-                            qty >= 0 ? 'text-emerald-700' : 'text-rose-700',
+                            qty >= 0 ? 'text-emerald-400' : 'text-rose-400',
                           ].join(' ')}
                         >
                           {qty >= 0 ? '+' : '-'}
@@ -649,7 +710,7 @@ export default function ProduccionHistorialPage() {
                         </div>
 
                         {typeof m.principalAnterior === 'number' && typeof m.principalNuevo === 'number' ? (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-slate-500">
                             {m.principalAnterior} → {m.principalNuevo}
                           </div>
                         ) : null}

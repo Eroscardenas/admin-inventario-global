@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 // lib/services/production.service.ts
@@ -294,7 +295,16 @@ export class ProductionService {
 
   static #buildNombreBolsaLlena(bv: any) {
     const kg = safeNum(bv?.pesoKg, 0);
-    return kg > 0 ? `Bolsa llena ${kg}kg` : 'Bolsa llena';
+    const nombreBolsaVacia = safeStr(bv?.nombre);
+    const esMaquila = /maquila/i.test(nombreBolsaVacia);
+
+    if (kg <= 0) {
+      return esMaquila ? 'Bolsa llena MAQUILA' : 'Bolsa llena';
+    }
+
+    return esMaquila
+      ? `Bolsa llena ${kg}kg MAQUILA`
+      : `Bolsa llena ${kg}kg`;
   }
 
   static #resolveSalidaProductMeta(input: SalidaProductMeta & { bolsaVaciaCodigo: string; tipoHielo: IceType }, bvData: any) {
